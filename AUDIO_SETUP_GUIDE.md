@@ -1,90 +1,90 @@
-# Настройка Audio для захвата звука собеседника
+# Audio Setup Guide - Capturing Both Sides of a Call
 
-## Проблема
-По умолчанию macOS Speech Framework захватывает только микрофон, но не системный звук (звук из браузера, Zoom, Teams и т.д.).
+## Problem
+By default, macOS Speech Framework only captures your microphone, not system audio (sound from browser, Zoom, Teams, etc.).
 
-## Решение: Aggregate Device с BlackHole
+## Solution: Aggregate Device with BlackHole
 
-### ⚠️ ВАЖНО: Nota НЕ меняет системный audio device автоматически!
-Это сделано специально, чтобы не ломать Zoom/Teams. Вам нужно вручную установить aggregate device как системный input.
+### ⚠️ IMPORTANT: Nota does NOT change system audio device automatically!
+This is intentional to avoid breaking Zoom/Teams. You need to manually set the aggregate device as system input.
 
-### Шаг 1: Установка BlackHole
-1. Скачать BlackHole: https://github.com/ExistentialAudio/BlackHole
-2. Установить BlackHole 2ch (или 16ch)
-3. Перезагрузить Mac (опционально)
+### Step 1: Install BlackHole
+1. Download BlackHole: https://github.com/ExistentialAudio/BlackHole
+2. Install BlackHole 2ch (or 16ch)
+3. Restart Mac (optional)
 
-### Шаг 2: Создание Aggregate Device
-1. Открыть **Audio MIDI Setup** (Finder → Applications → Utilities → Audio MIDI Setup)
-2. Нажать **+** (внизу слева) → **Create Aggregate Device**
-3. Назвать устройство, например: "Nota Recording"
-4. Включить (✓) следующие устройства:
-   - **Built-in Microphone** (или ваш микрофон)
+### Step 2: Create Aggregate Device
+1. Open **Audio MIDI Setup** (Finder → Applications → Utilities → Audio MIDI Setup)
+2. Click **+** (bottom left) → **Create Aggregate Device**
+3. Name it, for example: "Nota Recording"
+4. Enable (✓) these devices:
+   - **Built-in Microphone** (or your microphone)
    - **BlackHole 2ch**
-5. Важно: Установить **Clock Source** на Built-in Microphone
-6. Закрыть Audio MIDI Setup
+5. Important: Set **Clock Source** to Built-in Microphone
+6. Close Audio MIDI Setup
 
-### Шаг 3: Установить Aggregate Device как системный input
-**Вариант A: Через System Settings (рекомендуется)**
+### Step 3: Set Aggregate Device as System Input
+**Option A: Via System Settings (recommended)**
 1. System Settings → Sound → Input
-2. Выбрать созданный Aggregate Device ("Nota Recording")
+2. Select your Aggregate Device ("Nota Recording")
 
-**Вариант B: Через Audio MIDI Setup**
-1. Правой кнопкой на Aggregate Device
+**Option B: Via Audio MIDI Setup**
+1. Right-click on Aggregate Device
 2. "Use This Device For Sound Input"
 
-### Шаг 4: Настройка приложений для встреч
-Для Zoom/Teams/Google Meet:
-1. В настройках приложения:
-   - **Input**: Aggregate Device ("Nota Recording") - ваш голос
-   - **Output**: BlackHole 2ch - звук собеседника идет в BlackHole
-2. Это перенаправит звук собеседника в BlackHole
-3. Nota будет захватывать: микрофон + BlackHole (звук собеседника)
+### Step 4: Configure Meeting Apps
+For Zoom/Teams/Google Meet:
+1. In app settings:
+   - **Input**: Aggregate Device ("Nota Recording") - your voice
+   - **Output**: BlackHole 2ch - partner's voice goes to BlackHole
+2. This redirects partner's audio to BlackHole
+3. Nota will capture: microphone + BlackHole (partner's voice)
 
-### Шаг 5: Запустить запись в Nota
-1. Открыть Nota Dashboard
-2. Нажать Record
-3. Nota автоматически использует системный input (ваш Aggregate Device)
+### Step 5: Start Recording in Nota
+1. Open Nota Dashboard
+2. Click Record
+3. Nota automatically uses system input (your Aggregate Device)
 
-## Как это работает
+## How It Works
 
 ```
-Микрофон → Aggregate Device ┐
-                             ├→ System Input → Nota
-BlackHole ← Zoom/Teams ------┘
+Microphone → Aggregate Device ┐
+                              ├→ System Input → Nota
+BlackHole ← Zoom/Teams -------┘
 ```
 
-1. **Ваш голос**: Микрофон → Aggregate Device → System Input → Nota
-2. **Голос собеседника**: Zoom → BlackHole → Aggregate Device → System Input → Nota
-3. **Zoom слышит вас**: Aggregate Device (микрофон) → Zoom Input
-4. **Результат**: Nota слышит обоих, Zoom работает нормально!
+1. **Your voice**: Microphone → Aggregate Device → System Input → Nota
+2. **Partner's voice**: Zoom → BlackHole → Aggregate Device → System Input → Nota
+3. **Zoom hears you**: Aggregate Device (microphone) → Zoom Input
+4. **Result**: Nota hears both, Zoom works normally!
 
-## Альтернатива: Multi-Output Device (для прослушивания)
+## Alternative: Multi-Output Device (for listening)
 
-Если вы хотите **слышать** собеседника в наушниках:
+If you want to **hear** your partner in headphones:
 
-1. Создать **Multi-Output Device** в Audio MIDI Setup
-2. Включить:
+1. Create **Multi-Output Device** in Audio MIDI Setup
+2. Enable:
    - **BlackHole 2ch**
-   - **Built-in Output** (или наушники)
-3. В Zoom/Teams выбрать Output: Multi-Output Device
-4. Теперь звук идет и в BlackHole (для Nota) и в наушники (для вас)
+   - **Built-in Output** (or headphones)
+3. In Zoom/Teams select Output: Multi-Output Device
+4. Now audio goes to both BlackHole (for Nota) and headphones (for you)
 
-## Проверка настройки
+## Verification
 
-### 1. Проверить System Settings:
+### 1. Check System Settings:
 ```
 System Settings → Sound → Input
-Должно быть выбрано: Aggregate Device ("Nota Recording")
+Should show: Aggregate Device ("Nota Recording")
 ```
 
-### 2. Проверить Zoom/Teams:
+### 2. Check Zoom/Teams:
 ```
 Settings → Audio
 Input: Aggregate Device ("Nota Recording")
-Output: BlackHole 2ch (или Multi-Output Device)
+Output: BlackHole 2ch (or Multi-Output Device)
 ```
 
-### 3. В консоли Nota (при запуске записи):
+### 3. In Nota console (when starting recording):
 ```
 🎤 Starting Speech Framework recording...
 🎧 Selected audio device: default
@@ -97,72 +97,72 @@ Output: BlackHole 2ch (или Multi-Output Device)
 
 ## Troubleshooting
 
-### Не слышу собеседника в Nota
-1. ✅ Проверить System Settings → Sound → Input = Aggregate Device
-2. ✅ Проверить Zoom/Teams Output = BlackHole 2ch
-3. ✅ Проверить что Aggregate Device создан правильно
-4. ✅ Перезапустить запись в Nota
+### Not capturing partner's voice in Nota
+1. ✅ Check System Settings → Sound → Input = Aggregate Device
+2. ✅ Check Zoom/Teams Output = BlackHole 2ch
+3. ✅ Check Aggregate Device created correctly
+4. ✅ Restart recording in Nota
 
-### Собеседник не слышит меня
-1. ✅ Проверить Zoom/Teams Input = Aggregate Device (НЕ BlackHole!)
-2. ✅ Проверить что микрофон включен в Aggregate Device
-3. ✅ Проверить уровень микрофона в System Settings
+### Partner can't hear me
+1. ✅ Check Zoom/Teams Input = Aggregate Device (NOT BlackHole!)
+2. ✅ Check microphone is enabled in Aggregate Device
+3. ✅ Check microphone level in System Settings
 
-### Не слышу собеседника в наушниках
-1. ✅ Создать Multi-Output Device (см. выше)
-2. ✅ В Zoom/Teams Output = Multi-Output Device
-3. ✅ Проверить что наушники включены в Multi-Output Device
+### Can't hear partner in headphones
+1. ✅ Create Multi-Output Device (see above)
+2. ✅ In Zoom/Teams Output = Multi-Output Device
+3. ✅ Check headphones enabled in Multi-Output Device
 
-### Aggregate Device не появляется в списке
-1. ✅ Перезапустить Nota
-2. ✅ Проверить что Aggregate Device создан в Audio MIDI Setup
-3. ✅ Проверить что устройство включено (✓)
-4. ✅ Установить как системный input в System Settings
+### Aggregate Device not appearing
+1. ✅ Restart Nota
+2. ✅ Check Aggregate Device created in Audio MIDI Setup
+3. ✅ Check device is enabled (✓)
+4. ✅ Set as system input in System Settings
 
-### Плохое качество звука
-1. ✅ Увеличить Sample Rate в Audio MIDI Setup (48000 Hz)
-2. ✅ Проверить Clock Source (должен быть на микрофоне)
-3. ✅ Убедиться что оба устройства в Aggregate включены
+### Poor audio quality
+1. ✅ Increase Sample Rate in Audio MIDI Setup (48000 Hz)
+2. ✅ Check Clock Source (should be on microphone)
+3. ✅ Ensure both devices in Aggregate are enabled
 
-## Почему Nota НЕ меняет системный device автоматически?
+## Why Nota Doesn't Change System Device Automatically?
 
-**Причина:** Изменение системного default input device программно ломает другие приложения (Zoom, Teams, Discord и т.д.), которые уже используют микрофон.
+**Reason:** Programmatically changing the system default input device breaks other apps (Zoom, Teams, Discord, etc.) that are already using the microphone.
 
-**Решение:** Пользователь вручную устанавливает Aggregate Device как системный input один раз, и все приложения (включая Nota) используют его.
+**Solution:** User manually sets Aggregate Device as system input once, and all apps (including Nota) use it.
 
-**Преимущества:**
-- ✅ Zoom/Teams продолжают работать нормально
-- ✅ Собеседник слышит вас
-- ✅ Nota захватывает оба голоса
-- ✅ Не нужно переключать devices каждый раз
+**Benefits:**
+- ✅ Zoom/Teams continue working normally
+- ✅ Partner hears you
+- ✅ Nota captures both voices
+- ✅ No need to switch devices each time
 
-## Текущая реализация в Nota
+## Current Implementation in Nota
 
-### Что делает Nota:
-✅ Автоматически обнаруживает все audio input devices  
-✅ Показывает их в Settings (для информации)  
-✅ Использует системный default input device  
-✅ НЕ меняет системный default (чтобы не ломать другие приложения)  
-✅ Логирует текущий device в консоль  
+### What Nota Does:
+✅ Automatically discovers all audio input devices  
+✅ Shows them in Settings (for information)  
+✅ Uses system default input device  
+✅ Does NOT change system default (to avoid breaking other apps)  
+✅ Logs current device to console  
 
-### Что НЕ делает Nota:
-❌ НЕ меняет системный default input device  
-❌ НЕ переключает devices автоматически  
-❌ НЕ создает aggregate devices автоматически  
+### What Nota Does NOT Do:
+❌ Does NOT change system default input device  
+❌ Does NOT switch devices automatically  
+❌ Does NOT create aggregate devices automatically  
 
-## Рекомендуемая настройка
+## Recommended Setup
 
-### Для постоянного использования:
-1. Создать Aggregate Device один раз
-2. Установить его как системный input в System Settings
-3. Настроить Zoom/Teams один раз
-4. Использовать Nota без дополнительных настроек
+### For Regular Use:
+1. Create Aggregate Device once
+2. Set it as system input in System Settings
+3. Configure Zoom/Teams once
+4. Use Nota without additional setup
 
-### Для временного использования:
-1. Перед встречей: установить Aggregate Device как системный input
-2. После встречи: вернуть Built-in Microphone как системный input
+### For Temporary Use:
+1. Before meeting: set Aggregate Device as system input
+2. After meeting: revert to Built-in Microphone as system input
 
-## Полезные ссылки
+## Useful Links
 
 - BlackHole: https://github.com/ExistentialAudio/BlackHole
 - Audio MIDI Setup: `/Applications/Utilities/Audio MIDI Setup.app`
@@ -170,4 +170,4 @@ Output: BlackHole 2ch (или Multi-Output Device)
 
 ---
 
-**Примечание**: Nota использует системный default input device, поэтому вам нужно установить Aggregate Device как системный input вручную в System Settings.
+**Note**: Nota uses the system default input device, so you need to manually set the Aggregate Device as system input in System Settings.
