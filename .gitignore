@@ -1,0 +1,62 @@
+# Swift Build
+.build/
+.swiftpm/
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+DerivedData/
+
+# Build outputs
+*.app
+*.dmg
+Nota-Swift/Nota.app/
+Nota-Swift/.build/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# Thumbnails
+Thumbs.db
+
+# Files that might appear in the root of a volume
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Directories potentially created on remote AFP share
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# User data - NEVER commit
+*.plist
+recordings/
+data/
+
+# API Keys - NEVER commit
+.env
+.env.local
+**/.env
+**/.env.local
+**/config.json
+**/secrets.json
