@@ -1159,242 +1159,106 @@ struct SettingsTabView: View {
     @AppStorage("selectedModel") private var selectedModel = "gpt-5-nano"
     @AppStorage("outputLanguage") private var outputLanguage = "auto"
     @AppStorage("inputDeviceId") private var inputDeviceId = "default"
+    @AppStorage("globalHotkey") private var globalHotkey = "CMD+\\"
     
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                // Header
-                HStack {
-                    Image(systemName: "gearshape.fill")
-                        .font(.system(size: 24, weight: .semibold))
-                        .foregroundStyle(.blue)
-                    
-                    Text("Settings")
-                        .font(.title2)
-                        .fontWeight(.semibold)
-                    
-                    Spacer()
-                }
+        VStack(alignment: .leading, spacing: 20) {
+            // Header
+            Text("Settings")
+                .font(.title2)
+                .fontWeight(.semibold)
                 .padding(.horizontal)
                 .padding(.top)
-                
-                // Language Settings
-                settingsSection(
-                    title: "Language & Recognition",
-                    icon: "globe",
-                    color: .green
-                ) {
-                    settingsRow(title: "Output Language", description: "Speech recognition and AI analysis language") {
-                        Picker("Language", selection: $outputLanguage) {
-                            ForEach(audioRecorder.getSupportedLanguages(), id: \.code) { language in
-                                Text(language.name).tag(language.code)
-                            }
-                        }
-                        .pickerStyle(MenuPickerStyle())
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .onChange(of: outputLanguage) { _ in
-                            audioRecorder.updateSettings()
-                        }
+            
+            Divider()
+            
+            // Content
+            Form {
+                // API Keys Section
+                Section(header: Text("API Configuration").font(.headline)) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("OpenAI API Key")
+                            .font(.subheadline)
+                        SecureField("sk-proj-...", text: $openaiKey)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Deepgram API Key (Optional)")
+                            .font(.subheadline)
+                        SecureField("Optional", text: $deepgramKey)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    
+                    Picker("AI Model", selection: $selectedModel) {
+                        Text("GPT-5 Nano (Recommended)").tag("gpt-5-nano")
+                        Text("GPT-5 Mini").tag("gpt-5-mini")
                     }
                 }
                 
-                // API Configuration
-                settingsSection(
-                    title: "API Configuration",
-                    icon: "key.fill",
-                    color: .orange
-                ) {
-                    VStack(alignment: .leading, spacing: 16) {
-                        settingsRow(title: "OpenAI API Key", description: "Get your key from platform.openai.com") {
-                            SecureField("sk-proj-...", text: $openaiKey)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .frame(maxWidth: .infinity)
+                // Audio Section
+                Section(header: Text("Audio & Language").font(.headline)) {
+                    Picker("Input Device", selection: $inputDeviceId) {
+                        Text("Default").tag("default")
+                        ForEach(audioRecorder.availableDevices, id: \.id) { device in
+                            Text(device.name).tag(device.id)
                         }
-                        
-                        settingsRow(title: "Deepgram API Key (Optional)", description: "Alternative transcription provider") {
-                            SecureField("Token...", text: $deepgramKey)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .frame(maxWidth: .infinity)
+                    }
+                    .onChange(of: inputDeviceId) { _ in
+                        audioRecorder.updateSettings()
+                    }
+                    
+                    Picker("Language", selection: $outputLanguage) {
+                        ForEach(audioRecorder.getSupportedLanguages(), id: \.code) { language in
+                            Text(language.name).tag(language.code)
                         }
-                        
-                        settingsRow(title: "AI Model", description: "GPT-5 Nano is recommended for cost efficiency") {
-                            Picker("Model", selection: $selectedModel) {
-                                Text("GPT-5 Nano ($0.05/$0.40) - Recommended").tag("gpt-5-nano")
-                                Text("GPT-5 Mini ($0.25/$2.00)").tag("gpt-5-mini")
-                            }
-                            .pickerStyle(MenuPickerStyle())
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
+                    }
+                    .onChange(of: outputLanguage) { _ in
+                        audioRecorder.updateSettings()
+                    }
+                    
+                    Button("Refresh Devices") {
+                        audioRecorder.discoverAudioDevices()
                     }
                 }
                 
-                // Audio Settings
-                settingsSection(
-                    title: "Audio Input",
-                    icon: "waveform",
-                    color: .purple
-                ) {
-                    settingsRow(title: "Input Device", description: "Select your audio input source (supports BlackHole aggregate devices)") {
-                        Picker("Device", selection: $inputDeviceId) {
-                            Text("Default").tag("default")
-                            ForEach(audioRecorder.availableDevices, id: \.id) { device in
-                                Text(device.name).tag(device.id)
-                            }
-                        }
-                        .pickerStyle(MenuPickerStyle())
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .onChange(of: inputDeviceId) { _ in
-                            audioRecorder.updateSettings()
-                        }
+                // Shortcuts Section
+                Section(header: Text("Keyboard Shortcuts").font(.headline)) {
+                    HStack {
+                        Text("Toggle Mini Window:")
+                        Spacer()
+                        Text(globalHotkey)
+                            .font(.system(.body, design: .monospaced))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.gray.opacity(0.2))
+                            .cornerRadius(4)
                     }
+                    Text("Requires Accessibility permission in System Settings")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
                 
-                // Tips
-                settingsSection(
-                    title: "Tips & Shortcuts",
-                    icon: "lightbulb.fill",
-                    color: .yellow
-                ) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        tipRow(icon: "command", text: "Press CMD+\\ to show/hide mini window")
-                        tipRow(icon: "mic.fill", text: "Use BlackHole for system audio capture")
-                        tipRow(icon: "globe", text: "Auto language detection uses system language")
-                        tipRow(icon: "brain.head.profile", text: "AI insights appear during longer recordings")
-                        tipRow(icon: "tag.fill", text: "Keywords auto-assign recordings to projects")
+                // About Section
+                Section(header: Text("About").font(.headline)) {
+                    HStack {
+                        Text("Version")
+                        Spacer()
+                        Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.1.0")
+                            .foregroundColor(.secondary)
                     }
-                }
-                
-                // App Info & Updates
-                settingsSection(
-                    title: "About",
-                    icon: "info.circle.fill",
-                    color: .blue
-                ) {
-                    VStack(alignment: .leading, spacing: 16) {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Nota")
-                                    .font(.headline)
-                                Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.1.0")")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            
-                            Spacer()
-                            
-                            Button(action: {
-                                if let appDelegate = NSApp.delegate as? AppDelegate {
-                                    appDelegate.updateChecker?.checkForUpdates(silent: false)
-                                }
-                            }) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "arrow.down.circle.fill")
-                                    Text("Check for Updates")
-                                }
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                            }
-                            .buttonStyle(.borderedProminent)
-                        }
-                        
-                        Divider()
-                        
-                        HStack(spacing: 16) {
-                            Link(destination: URL(string: "https://github.com/daniilkozin/nota")!) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "link.circle.fill")
-                                    Text("GitHub")
-                                }
-                                .font(.caption)
-                            }
-                            
-                            Link(destination: URL(string: "https://github.com/daniilkozin/nota/issues")!) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "exclamationmark.bubble.fill")
-                                    Text("Report Issue")
-                                }
-                                .font(.caption)
-                            }
-                            
-                            Link(destination: URL(string: "https://github.com/daniilkozin/nota/blob/main/AUDIO_SETUP_GUIDE.md")!) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "book.fill")
-                                    Text("Documentation")
-                                }
-                                .font(.caption)
-                            }
-                        }
-                    }
+                    
+                    Link("Check for Updates", destination: URL(string: "https://github.com/DaniilKozin/nota/releases")!)
+                    Link("GitHub Repository", destination: URL(string: "https://github.com/DaniilKozin/nota")!)
+                    Link("Report Issue", destination: URL(string: "https://github.com/DaniilKozin/nota/issues")!)
+                    Link("Documentation", destination: URL(string: "https://github.com/DaniilKozin/nota/blob/main/AUDIO_SETUP_GUIDE.md")!)
                 }
             }
-            .padding()
+            .formStyle(.grouped)
+            .padding(.horizontal)
         }
-    }
-    
-    // MARK: - Helper Views
-    @ViewBuilder
-    private func settingsSection<Content: View>(
-        title: String,
-        icon: String,
-        color: Color,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 8) {
-                Image(systemName: icon)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(color)
-                    .frame(width: 24, height: 24)
-                    .background {
-                        Circle()
-                            .fill(color.opacity(0.15))
-                    }
-                
-                Text(title)
-                    .font(.headline)
-                    .fontWeight(.semibold)
-            }
-            
-            content()
+        .onAppear {
+            audioRecorder.discoverAudioDevices()
         }
-        .padding(20)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.gray.opacity(0.05))
-        .cornerRadius(12)
-    }
-    
-    @ViewBuilder
-    private func settingsRow<Content: View>(
-        title: String,
-        description: String,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.subheadline)
-                .fontWeight(.medium)
-            
-            Text(description)
-                .font(.caption)
-                .foregroundColor(.secondary)
-            
-            content()
-        }
-    }
-    
-    private func tipRow(icon: String, text: String) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundColor(.secondary)
-                .frame(width: 20)
-            
-            Text(text)
-                .font(.caption)
-                .foregroundColor(.secondary)
-            
-            Spacer()
-        }
-        .padding(.vertical, 4)
     }
 }

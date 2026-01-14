@@ -70,7 +70,8 @@ class AudioRecorder: NSObject, ObservableObject {
         super.init()
         setupSpeechRecognizer()
         loadSettings()
-        discoverAudioDevices()
+        // Don't discover devices immediately - wait until needed
+        // This prevents crashes on first launch before permissions are granted
     }
     
     // Set data manager for saving recordings
@@ -103,7 +104,7 @@ class AudioRecorder: NSObject, ObservableObject {
     }
     
     // MARK: - Audio Device Discovery
-    private func discoverAudioDevices() {
+    func discoverAudioDevices() {
         var devices: [AudioDevice] = []
         
         // Add default device
@@ -125,33 +126,45 @@ class AudioRecorder: NSObject, ObservableObject {
             &dataSize
         )
         
-        if status == noErr {
-            let deviceCount = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
-            var audioDevices = [AudioDeviceID](repeating: 0, count: deviceCount)
-            
-            status = AudioObjectGetPropertyData(
-                AudioObjectID(kAudioObjectSystemObject),
-                &propertyAddress,
-                0,
-                nil,
-                &dataSize,
-                &audioDevices
-            )
-            
-            if status == noErr {
-                for deviceID in audioDevices {
-                    // Check if device has input channels
-                    if hasInputChannels(deviceID: deviceID),
-                       let deviceName = getDeviceName(deviceID: deviceID),
-                       let deviceUID = getDeviceUID(deviceID: deviceID) {
-                        devices.append(AudioDevice(
-                            id: deviceUID,
-                            name: deviceName,
-                            isInput: true
-                        ))
-                        print("🎧 Found input device: \(deviceName) (UID: \(deviceUID))")
-                    }
-                }
+        guard status == noErr else {
+            print("⚠️ Could not get audio devices (permissions may not be granted yet)")
+            DispatchQueue.main.async {
+                self.availableDevices = devices
+            }
+            return
+        }
+        
+        let deviceCount = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
+        var audioDevices = [AudioDeviceID](repeating: 0, count: deviceCount)
+        
+        status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress,
+            0,
+            nil,
+            &dataSize,
+            &audioDevices
+        )
+        
+        guard status == noErr else {
+            print("⚠️ Could not get audio device data")
+            DispatchQueue.main.async {
+                self.availableDevices = devices
+            }
+            return
+        }
+        
+        for deviceID in audioDevices {
+            // Check if device has input channels
+            if hasInputChannels(deviceID: deviceID),
+               let deviceName = getDeviceName(deviceID: deviceID),
+               let deviceUID = getDeviceUID(deviceID: deviceID) {
+                devices.append(AudioDevice(
+                    id: deviceUID,
+                    name: deviceName,
+                    isInput: true
+                ))
+                print("🎧 Found input device: \(deviceName) (UID: \(deviceUID))")
             }
         }
         
@@ -349,6 +362,29 @@ class AudioRecorder: NSObject, ObservableObject {
         liveInsights = ""
         insightsCache.removeAll()
         
+        // First, request Speech Recognition permission
+        let speechStatus = SFSpeechRecognizer.authorizationStatus()
+        if speechStatus != .authorized {
+            print("🗣️ Requesting Speech Recognition permission...")
+            SFSpeechRecognizer.requestAuthorization { [weak self] status in
+                DispatchQueue.main.async {
+                    if status == .authorized {
+                        print("✅ Speech Recognition authorized")
+                        // Now request microphone
+                        self?.requestMicrophoneAndStart()
+                    } else {
+                        print("❌ Speech Recognition denied: \(status.rawValue)")
+                        self?.connectionStatus = "Speech Recognition denied - enable in System Settings"
+                    }
+                }
+            }
+        } else {
+            // Speech Recognition already authorized, request microphone
+            requestMicrophoneAndStart()
+        }
+    }
+    
+    private func requestMicrophoneAndStart() {
         // Request microphone permission for macOS
         requestMicrophonePermission { [weak self] granted in
             DispatchQueue.main.async {
@@ -531,7 +567,11 @@ class AudioRecorder: NSObject, ObservableObject {
                     if let strongSelf = self, !strongSelf.isPhantomTranscript(newTranscript) {
                         // Update buffer for smart processing
                         strongSelf.transcriptBuffer = newTranscript
-                        print("🎤 Buffer updated: \(newTranscript.count) chars")
+                        
+                        // ALSO update the published transcript immediately for live feedback
+                        strongSelf.transcript = newTranscript
+                        
+                        print("🎤 Transcript updated: \(newTranscript.count) chars - \(newTranscript.prefix(50))...")
                     }
                 }
                 
@@ -553,8 +593,26 @@ class AudioRecorder: NSObject, ObservableObject {
             print("✅ Speech Framework recording started successfully")
             print("🎧 Recording from: \(getActiveAudioDeviceName())")
         } catch {
-            connectionStatus = "Audio engine start failed: \(error.localizedDescription)"
+            let errorMsg = "Audio engine start failed: \(error.localizedDescription)"
+            connectionStatus = errorMsg
             print("❌ Audio engine error: \(error)")
+            print("❌ Error details: \(error)")
+            
+            // Try to provide more helpful error message
+            if error.localizedDescription.contains("561015905") {
+                connectionStatus = "Audio device error - check Settings"
+                print("💡 This usually means the selected audio device is not available")
+            }
+            
+            // Show alert to user
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "Recording Failed"
+                alert.informativeText = errorMsg
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+            }
         }
     }
     

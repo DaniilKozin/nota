@@ -32,8 +32,8 @@ class MiniWindowController: NSObject {
         window?.backgroundColor = NSColor.clear
         window?.isOpaque = false
         window?.hasShadow = false
-        window?.level = .normal
-        window?.collectionBehavior = [.canJoinAllSpaces, .stationary]
+        window?.level = .floating  // Always on top!
+        window?.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         window?.isMovableByWindowBackground = true
         window?.hidesOnDeactivate = false
         window?.title = "Nota Mini"
@@ -158,6 +158,13 @@ struct MiniWindowView: View {
                     .font(.caption)
                     .fontWeight(.medium)
                     .foregroundStyle(.primary)
+                
+                // Show connection status if not ready
+                if audioRecorder.isRecording && !audioRecorder.connectionStatus.contains("Recording") {
+                    Text("• \(audioRecorder.connectionStatus)")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
@@ -187,10 +194,13 @@ struct MiniWindowView: View {
             HStack(spacing: 8) {
                 // Record/Stop button
                 Button(action: {
+                    print("🔴 Record button clicked! Current state: \(audioRecorder.isRecording)")
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                         if audioRecorder.isRecording {
+                            print("⏹️ Stopping recording...")
                             audioRecorder.stopRecording()
                         } else {
+                            print("🎤 Starting recording...")
                             audioRecorder.startRecording()
                         }
                     }
@@ -409,38 +419,81 @@ struct MiniWindowView: View {
                     .multilineTextAlignment(.center)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if audioRecorder.liveInsights.isEmpty {
+            VStack(spacing: 8) {
+                ProgressView()
+                    .scaleEffect(0.7)
+                    .padding(.bottom, 4)
+                
+                Text("Generating AI insights...")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                
+                Text("Requires OpenAI API key in Settings")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary.opacity(0.7))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            VStack(alignment: .leading, spacing: 12) {
-                // Topic indicator with glass pill
-                HStack {
-                    Text("TOPIC")
-                        .font(.caption2)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.green)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    // Live insights header
+                    HStack {
+                        Text("AI INSIGHTS")
+                            .font(.caption2)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.purple)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(
+                                Capsule()
+                                    .fill(.purple.opacity(0.2))
+                                    .overlay(
+                                        Capsule()
+                                            .stroke(.purple.opacity(0.3), lineWidth: 0.5)
+                                    )
+                            )
+                        
+                        Spacer()
+                        
+                        // Copy insights button
+                        Button(action: {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(audioRecorder.liveInsights, forType: .string)
+                        }) {
+                            Image(systemName: "doc.on.doc")
+                                .font(.caption2)
+                                .foregroundStyle(.primary)
+                                .padding(6)
+                                .background(
+                                    Circle()
+                                        .fill(.thinMaterial)
+                                        .overlay(
+                                            Circle()
+                                                .stroke(Color.white.opacity(0.2), lineWidth: 0.5)
+                                        )
+                                )
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        .help("Copy insights")
+                    }
+                    
+                    // Display the actual insights
+                    Text(audioRecorder.liveInsights)
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .background(
-                            Capsule()
-                                .fill(.green.opacity(0.2))
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(.purple.opacity(0.1))
                                 .overlay(
-                                    Capsule()
-                                        .stroke(.green.opacity(0.3), lineWidth: 0.5)
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .stroke(.purple.opacity(0.2), lineWidth: 0.5)
                                 )
                         )
-                    
-                    Spacer()
                 }
-                
-                Text("Meeting discussion in progress...")
-                    .font(.caption)
-                    .foregroundStyle(.primary)
-                
-                // Action buttons with glass effect
-                HStack(spacing: 8) {
-                    actionButton("Follow-up", icon: "message", color: .blue)
-                    actionButton("Fact-check", icon: "checkmark.circle", color: .green)
-                    actionButton("Recap", icon: "list.bullet", color: .orange)
-                }
+                .padding(.vertical, 4)
             }
         }
     }

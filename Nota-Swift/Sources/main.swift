@@ -49,22 +49,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupGlobalHotkey() {
         print("🔧 Setting up global hotkey...")
         
-        // Request accessibility permissions first
-        let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true]
-        let accessibilityEnabled = AXIsProcessTrustedWithOptions(options)
+        // Check accessibility permissions WITHOUT prompting
+        let accessibilityEnabled = AXIsProcessTrusted()
         
         if !accessibilityEnabled {
-            print("⚠️ Accessibility permissions needed for global hotkeys")
-            print("💡 Please grant accessibility permissions in System Settings > Privacy & Security > Accessibility")
+            print("⚠️ Accessibility permissions not granted")
+            print("💡 Global hotkey (CMD+\\) will not work until you grant Accessibility permission")
+            print("💡 Go to: System Settings > Privacy & Security > Accessibility")
+            // Don't prompt automatically - let user decide if they want hotkeys
+        } else {
+            print("✅ Accessibility permissions granted - hotkeys enabled")
         }
         
         // Use NSEvent monitoring for global hotkey (CMD+\)
         NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
-            // Debug: print all CMD key combinations
-            if event.modifierFlags.contains(.command) {
-                print("🔍 Global key pressed: keyCode=\(event.keyCode), char='\(event.charactersIgnoringModifiers ?? "nil")'")
-            }
-            
             // Check for CMD+\ (try multiple key codes)
             // 42 = backslash on US keyboard, 43 = alternative
             if (event.keyCode == 42 || event.keyCode == 43 || event.keyCode == 50) && event.modifierFlags.contains(.command) {
@@ -77,11 +75,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Also monitor local events when app is active
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            // Debug: print all CMD key combinations
-            if event.modifierFlags.contains(.command) {
-                print("🔍 Local key pressed: keyCode=\(event.keyCode), char='\(event.charactersIgnoringModifiers ?? "nil")'")
-            }
-            
             if (event.keyCode == 42 || event.keyCode == 43 || event.keyCode == 50) && event.modifierFlags.contains(.command) {
                 print("🎯 Local hotkey detected! keyCode=\(event.keyCode)")
                 DispatchQueue.main.async {
@@ -92,9 +85,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return event
         }
         
-        print("✅ Global hotkey CMD+\\ registered (monitoring keyCodes 42, 43, 50)")
-        print("💡 Try pressing CMD+\\ to test the hotkey")
-        print("🔐 Accessibility status: \(accessibilityEnabled ? "✅ Enabled" : "❌ Disabled")")
+        print("✅ Global hotkey CMD+\\ registered")
+        if !accessibilityEnabled {
+            print("⚠️ Hotkey will only work when app is active (Accessibility permission needed for global hotkey)")
+        }
     }
     
     func toggleMiniWindow() {
