@@ -121,7 +121,7 @@ nota/
 
 3. **Push to GitHub**
    ```bash
-   git remote add origin https://github.com/yourusername/nota.git
+   git remote add origin https://github.com/DaniilKozin/nota.git
    git branch -M main
    git push -u origin main
    ```
@@ -134,7 +134,7 @@ nota/
    - Upload `Nota-v2.1-SmartTranscription.dmg` to GitHub Release
 
 5. **Update README**
-   - Replace `yourusername` with your actual GitHub username
+   - Replace `DaniilKozin` with your actual GitHub username
    - Update repository URLs
 
 ---

@@ -11,7 +11,7 @@ class UpdateChecker: ObservableObject {
     @Published var releaseNotes = ""
     @Published var isChecking = false
     
-    private let githubRepo = "daniilkozin/nota" // Change to your GitHub username
+    private let githubRepo = "DaniilKozin/nota" // Your GitHub repository
     private let currentVersion: String
     
     init() {

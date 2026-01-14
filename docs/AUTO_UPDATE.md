@@ -45,7 +45,7 @@ When an update is available:
 
 1. **GitHub API** - Fetches latest release info
    ```
-   GET https://api.github.com/repos/daniilkozin/nota/releases/latest
+   GET https://api.github.com/repos/DaniilKozin/nota/releases/latest
    ```
 
 2. **Version Comparison** - Compares semantic versions
@@ -65,7 +65,7 @@ When an update is available:
 Update the GitHub repo in `UpdateChecker.swift`:
 
 ```swift
-private let githubRepo = "daniilkozin/nota" // Change to your username
+private let githubRepo = "DaniilKozin/nota" // Change to your username
 ```
 
 ### Check Frequency
@@ -266,7 +266,7 @@ open Nota.app
 # Look for: "❌ Update check failed: ..."
 
 # Test GitHub API manually
-curl https://api.github.com/repos/daniilkozin/nota/releases/latest
+curl https://api.github.com/repos/DaniilKozin/nota/releases/latest
 ```
 
 ### Wrong version detected

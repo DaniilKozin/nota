@@ -12,7 +12,7 @@ Thank you for your interest in contributing to Nota! This document provides guid
 
 ### Reporting Bugs
 
-1. Check if the bug has already been reported in [Issues](https://github.com/yourusername/nota/issues)
+1. Check if the bug has already been reported in [Issues](https://github.com/DaniilKozin/nota/issues)
 2. If not, create a new issue with:
    - Clear title and description
    - Steps to reproduce
@@ -22,7 +22,7 @@ Thank you for your interest in contributing to Nota! This document provides guid
 
 ### Suggesting Features
 
-1. Check [Discussions](https://github.com/yourusername/nota/discussions) for similar ideas
+1. Check [Discussions](https://github.com/DaniilKozin/nota/discussions) for similar ideas
 2. Create a new discussion or issue with:
    - Clear description of the feature
    - Use cases and benefits
@@ -109,7 +109,7 @@ Nota-Swift/
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/nota.git
+git clone https://github.com/DaniilKozin/nota.git
 cd nota/Nota-Swift
 
 # Build debug version
@@ -195,8 +195,8 @@ Fixes #456
 
 ## Questions?
 
-- Open a [Discussion](https://github.com/yourusername/nota/discussions)
-- Check existing [Issues](https://github.com/yourusername/nota/issues)
+- Open a [Discussion](https://github.com/DaniilKozin/nota/discussions)
+- Check existing [Issues](https://github.com/DaniilKozin/nota/issues)
 - Read the [README](README.md)
 
 ## License

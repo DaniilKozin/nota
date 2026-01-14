@@ -55,14 +55,14 @@
 ### Быстрая установка
 ```bash
 # Скачать и установить
-curl -L https://github.com/daniilkozin/nota-swift/releases/latest/download/Nota-1.0.dmg -o Nota.dmg
+curl -L https://github.com/DaniilKozin/nota-swift/releases/latest/download/Nota-1.0.dmg -o Nota.dmg
 open Nota.dmg
 # Перетащить Nota.app в Applications
 ```
 
 ### Сборка из исходников
 ```bash
-git clone https://github.com/daniilkozin/nota-swift
+git clone https://github.com/DaniilKozin/nota-swift
 cd nota-swift
 ./build.sh
 ```
@@ -209,7 +209,7 @@ xattr -cr /Applications/Nota.app
 - Проверьте баланс API ключа
 
 ### Контакты
-- **GitHub Issues**: https://github.com/daniilkozin/nota-swift/issues
+- **GitHub Issues**: https://github.com/DaniilKozin/nota-swift/issues
 - **Email**: support@nota-app.com
 - **Telegram**: @nota_support
 

@@ -206,7 +206,7 @@ Nota is **free and open source**. You only pay for OpenAI API usage:
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/nota.git
+git clone https://github.com/DaniilKozin/nota.git
 cd nota/Nota-Swift
 
 # Build release version
@@ -242,7 +242,7 @@ Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for gu
 
 ```bash
 # Fork and clone
-git clone https://github.com/yourusername/nota.git
+git clone https://github.com/DaniilKozin/nota.git
 cd nota/Nota-Swift
 
 # Create feature branch
