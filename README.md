@@ -37,9 +37,9 @@ Nota is a native macOS application that provides real-time transcription and AI-
 
 ## 📥 Download
 
-**Latest Release: v2.1.0**
+**Latest Release: v2.3.0**
 
-[⬇️ Download Nota-v2.1.dmg](releases/Nota-v2.1.dmg) (2.6 MB)
+[⬇️ Download Nota-v2.3.dmg](releases/Nota-v2.3.dmg) (2.6 MB)
 
 ### System Requirements
 - macOS 13.0 (Ventura) or later
@@ -76,20 +76,29 @@ See [docs/GATEKEEPER_FIX.md](docs/GATEKEEPER_FIX.md) for details.
 1. Click the **microphone icon** in menu bar
 2. Open **Dashboard** (home icon)
 3. Go to **Settings** tab
-4. Enter your **OpenAI API key** ([get one here](https://platform.openai.com))
-5. Choose **GPT-5 Nano** (recommended) or **GPT-5 Mini**
-6. Select your **audio device** and **language**
-7. Start recording!
+4. **AssemblyAI key is already included!** (supports 99 languages)
+5. Optionally add your **OpenAI API key** ([get key](https://platform.openai.com)) for AI insights
+6. Choose **AI Model**: GPT-5 Nano (recommended) or GPT-5 Mini
+7. Select your **audio device** and **language**
+8. Start recording!
+
+### Optional API Keys
+- **OpenAI**: Required for AI insights and meeting analysis
+- **Deepgram**: Alternative transcription provider (if you prefer)
+- **Your own AssemblyAI key**: For higher usage limits
 
 ---
 
 ## 💡 Features
 
 ### Smart Transcription
-- Real-time transcription every 6 seconds
-- AI insights generation every 45 seconds
-- Messenger-style incremental bubbles
-- Multi-language support (23 languages)
+- **True Multilingual Support**: Automatic language detection for 99 languages
+- **Real-time Language Switching**: Seamlessly handles mixed-language conversations
+- **Multiple Providers**: Deepgram (multilingual), AssemblyAI (English), Whisper (fallback)
+- **Smart Provider Selection**: Auto-selects best provider for your use case
+- **AI Insights**: Generated every 45 seconds using GPT-5 Nano/Mini
+- **Messenger-style Display**: Incremental transcript bubbles
+- **Auto-detection**: Automatic language detection for all supported languages
 
 ### AI Analysis
 - Meeting summary
@@ -113,18 +122,31 @@ See [docs/GATEKEEPER_FIX.md](docs/GATEKEEPER_FIX.md) for details.
 
 ## 💰 Pricing
 
-Nota is **free and open source**. You only pay for OpenAI API usage:
+Nota is **free and open source** with **included AssemblyAI API key**. You only pay for optional AI insights:
 
-| Model | Input | Output | Typical 1h Meeting |
+### Transcription (Included!)
+| Provider | Languages | Latency | Cost/Hour |
+|----------|-----------|---------|-----------|
+| **AssemblyAI** (included key) | 99 languages | ~100-200ms | **FREE*** |
+| **Deepgram** (optional) | 30+ languages | ~100-200ms | $0.75 |
+| **Whisper** (fallback) | 50+ languages | ~5 seconds | $0.36 |
+
+*Default shared API key included. Add your own key for unlimited usage at $0.27/hour.
+
+### AI Insights (Optional)
+| Model | Input | Output | Typical Cost/Hour |
 |-------|-------|--------|-------------------|
 | **GPT-5 Nano** (recommended) | $0.05/1M tokens | $0.40/1M tokens | $0.01-0.05 |
 | **GPT-5 Mini** | $0.25/1M tokens | $2.00/1M tokens | $0.05-0.15 |
+
+**Total typical cost for 1-hour meeting: FREE transcription + $0.01-0.05 for AI insights**
 
 ---
 
 ## 📚 Documentation
 
 - [AUDIO_SETUP_GUIDE.md](AUDIO_SETUP_GUIDE.md) - Audio configuration with BlackHole
+- [docs/ASSEMBLYAI_IMPLEMENTATION.md](docs/ASSEMBLYAI_IMPLEMENTATION.md) - AssemblyAI streaming details
 - [docs/GATEKEEPER_FIX.md](docs/GATEKEEPER_FIX.md) - Fix "damaged app" error
 - [docs/AGGREGATE_DEVICE_FIX.md](docs/AGGREGATE_DEVICE_FIX.md) - Fix microphone passthrough
 - [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) - How to contribute
@@ -174,9 +196,11 @@ Contributions are welcome! See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for 
 ## 🆘 Troubleshooting
 
 ### No transcription appearing
+- **AssemblyAI key is included by default** - should work immediately
 - Grant **Microphone** permission in System Settings
-- Grant **Speech Recognition** permission in System Settings
-- Check that microphone is working
+- Check that microphone is working in System Settings
+- Try switching provider in Settings if issues persist
+- Check console logs for connection errors
 
 ### No AI insights
 - Add **OpenAI API key** in Settings
@@ -202,9 +226,10 @@ MIT License - see [LICENSE](LICENSE) file for details
 
 ## 🙏 Acknowledgments
 
-- [OpenAI](https://openai.com) - GPT-5 API
+- [AssemblyAI](https://www.assemblyai.com) - Universal-Streaming API
+- [Deepgram](https://deepgram.com) - Multi-language streaming STT
+- [OpenAI](https://openai.com) - GPT-5 API and Whisper
 - [BlackHole](https://github.com/ExistentialAudio/BlackHole) - Virtual audio driver
-- Apple - Speech Recognition Framework
 
 ---
 

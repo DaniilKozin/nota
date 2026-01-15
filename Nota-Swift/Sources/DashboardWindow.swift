@@ -1156,6 +1156,8 @@ struct SettingsTabView: View {
     @ObservedObject var audioRecorder: AudioRecorder
     @AppStorage("openaiKey") private var openaiKey = ""
     @AppStorage("deepgramKey") private var deepgramKey = ""
+    @AppStorage("assemblyaiKey") private var assemblyaiKey = "bcacd502bfd640bd817306c3e35a3626"
+    @AppStorage("transcriptionProvider") private var transcriptionProvider = "auto"
     @AppStorage("selectedModel") private var selectedModel = "gpt-5-nano"
     @AppStorage("outputLanguage") private var outputLanguage = "auto"
     @AppStorage("inputDeviceId") private var inputDeviceId = "default"
@@ -1217,9 +1219,47 @@ struct SettingsTabView: View {
                         audioRecorder.updateSettings()
                     }
                     
-                    Button("Refresh Devices") {
-                        audioRecorder.discoverAudioDevices()
+                    Picker("Transcription Provider", selection: $transcriptionProvider) {
+                        Text("Auto (AssemblyAI - 99 Languages)").tag("auto")
+                        Text("AssemblyAI (99 Languages)").tag("assemblyai")
+                        Text("Deepgram (30+ Languages)").tag("deepgram")
+                        Text("OpenAI Whisper (Fallback)").tag("whisper")
                     }
+                    .onChange(of: transcriptionProvider) { _ in
+                        audioRecorder.updateSettings()
+                    }
+                    
+                    Text("Auto mode: AssemblyAI for all languages (included API key)")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                
+                // API Keys for transcription
+                Section(header: Text("Transcription API Keys").font(.headline)) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("AssemblyAI API Key")
+                            .font(.subheadline)
+                        SecureField("Included - or add your own", text: $assemblyaiKey)
+                            .textFieldStyle(.roundedBorder)
+                        Text("Default key included (99 languages, $0.27/hour)")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Deepgram API Key (Optional)")
+                            .font(.subheadline)
+                        SecureField("Optional - alternative provider", text: $deepgramKey)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    
+                    Button("Refresh Devices") {
+                        // Only refresh if not recording to avoid crashes
+                        if !audioRecorder.isRecording {
+                            audioRecorder.discoverAudioDevices()
+                        }
+                    }
+                    .disabled(audioRecorder.isRecording)
                 }
                 
                 // Shortcuts Section
@@ -1258,7 +1298,10 @@ struct SettingsTabView: View {
             .padding(.horizontal)
         }
         .onAppear {
-            audioRecorder.discoverAudioDevices()
+            // Only discover devices if not recording
+            if !audioRecorder.isRecording {
+                audioRecorder.discoverAudioDevices()
+            }
         }
     }
 }

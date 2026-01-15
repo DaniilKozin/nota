@@ -1,6 +1,5 @@
 import Foundation
 import AVFoundation
-import Speech
 import Combine
 import AppKit
 import CoreAudio
@@ -21,22 +20,18 @@ struct RecordingSession: Codable, Identifiable {
     }
 }
 
-class AudioRecorder: NSObject, ObservableObject {
+class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     @Published var isRecording = false
     @Published var transcript = ""
     @Published var liveInsights = ""
     @Published var connectionStatus = "Ready"
     @Published var availableDevices: [AudioDevice] = []
     
-    private var audioEngine = AVAudioEngine()
-    private var speechRecognizer: SFSpeechRecognizer?
-    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
-    private var recognitionTask: SFSpeechRecognitionTask?
     private var selectedDeviceId: String = "default"
     private var selectedLanguage: String = "auto"
     private var transcriptionProvider: String = "auto"
     
-    // Audio recording for OpenAI Whisper
+    // Audio recording for Whisper
     private var audioRecorder: AVAudioRecorder?
     private var recordingURL: URL?
     
@@ -68,10 +63,7 @@ class AudioRecorder: NSObject, ObservableObject {
     
     override init() {
         super.init()
-        setupSpeechRecognizer()
         loadSettings()
-        // Don't discover devices immediately - wait until needed
-        // This prevents crashes on first launch before permissions are granted
     }
     
     // Set data manager for saving recordings
@@ -95,12 +87,6 @@ class AudioRecorder: NSObject, ObservableObject {
         selectedDeviceId = UserDefaults.standard.string(forKey: "inputDeviceId") ?? "default"
         selectedLanguage = UserDefaults.standard.string(forKey: "outputLanguage") ?? "auto"
         transcriptionProvider = UserDefaults.standard.string(forKey: "transcriptionProvider") ?? "auto"
-        
-        // Update speech recognizer if language changed
-        let newLanguageCode = getLanguageCode()
-        if speechRecognizer?.locale.identifier != newLanguageCode {
-            setupSpeechRecognizer()
-        }
     }
     
     // MARK: - Audio Device Discovery
@@ -214,47 +200,6 @@ class AudioRecorder: NSObject, ObservableObject {
         return bufferList.mNumberBuffers > 0 && bufferList.mBuffers.mNumberChannels > 0
     }
     
-    // MARK: - Speech Recognition Setup
-    private func setupSpeechRecognizer() {
-        // Determine language for speech recognition
-        let languageCode = getLanguageCode()
-        print("🌍 Setting up speech recognizer for: \(languageCode)")
-        
-        speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: languageCode))
-        
-        // Check if the language is supported
-        if let recognizer = speechRecognizer {
-            print("✅ Speech recognizer created for \(languageCode)")
-            print("📱 Is available: \(recognizer.isAvailable)")
-            print("📱 Locale: \(recognizer.locale.identifier)")
-        } else {
-            print("❌ Failed to create speech recognizer for \(languageCode)")
-        }
-        
-        // Request Speech Recognition authorization immediately
-        SFSpeechRecognizer.requestAuthorization { [weak self] authStatus in
-            DispatchQueue.main.async {
-                switch authStatus {
-                case .authorized:
-                    self?.connectionStatus = "Ready"
-                    print("✅ Speech Recognition authorized")
-                case .denied:
-                    self?.connectionStatus = "Speech recognition denied - enable in System Settings"
-                    print("❌ Speech Recognition denied")
-                case .restricted:
-                    self?.connectionStatus = "Speech recognition restricted"
-                    print("❌ Speech Recognition restricted")
-                case .notDetermined:
-                    self?.connectionStatus = "Speech recognition not determined"
-                    print("⚠️ Speech Recognition not determined")
-                @unknown default:
-                    self?.connectionStatus = "Unknown authorization status"
-                    print("❓ Speech Recognition unknown status")
-                }
-            }
-        }
-    }
-    
     // MARK: - Language Support
     private func getLanguageCode() -> String {
         let outputLanguage = UserDefaults.standard.string(forKey: "outputLanguage") ?? "auto"
@@ -362,35 +307,12 @@ class AudioRecorder: NSObject, ObservableObject {
         liveInsights = ""
         insightsCache.removeAll()
         
-        // First, request Speech Recognition permission
-        let speechStatus = SFSpeechRecognizer.authorizationStatus()
-        if speechStatus != .authorized {
-            print("🗣️ Requesting Speech Recognition permission...")
-            SFSpeechRecognizer.requestAuthorization { [weak self] status in
-                DispatchQueue.main.async {
-                    if status == .authorized {
-                        print("✅ Speech Recognition authorized")
-                        // Now request microphone
-                        self?.requestMicrophoneAndStart()
-                    } else {
-                        print("❌ Speech Recognition denied: \(status.rawValue)")
-                        self?.connectionStatus = "Speech Recognition denied - enable in System Settings"
-                    }
-                }
-            }
-        } else {
-            // Speech Recognition already authorized, request microphone
-            requestMicrophoneAndStart()
-        }
-    }
-    
-    private func requestMicrophoneAndStart() {
-        // Request microphone permission for macOS
+        // Only request microphone permission (no Speech Recognition needed!)
         requestMicrophonePermission { [weak self] granted in
             DispatchQueue.main.async {
                 if granted {
                     print("✅ Microphone permission granted, starting audio recording")
-                    self?.startAudioRecording()
+                    self?.startStreamingTranscription()
                     self?.startSmartProcessing()
                 } else {
                     print("❌ Microphone permission denied")
@@ -398,6 +320,642 @@ class AudioRecorder: NSObject, ObservableObject {
                 }
             }
         }
+    }
+    
+    // MARK: - Streaming Transcription (Smart provider selection)
+    private var deepgramWebSocket: URLSessionWebSocketTask?
+    private var assemblyaiWebSocket: URLSessionWebSocketTask?
+    private var deepgramSession: URLSession?
+    private var assemblyaiSession: URLSession?
+    private var assemblyaiAudioPosition: Int = 0
+    private var deepgramAudioPosition: Int = 0
+    private var deepgramKeepAliveTimer: Timer?
+    
+    private func startStreamingTranscription() {
+        let provider = UserDefaults.standard.string(forKey: "transcriptionProvider") ?? "auto"
+        let language = getLanguageCode()
+        
+        print("🎙️ Transcription provider: \(provider), language: \(language)")
+        
+        // Smart provider selection
+        let selectedProvider: String
+        if provider == "auto" {
+            // Auto mode: Use Deepgram for better multilingual support
+            // AssemblyAI multilingual has issues with real-time language switching
+            selectedProvider = "deepgram"
+        } else {
+            selectedProvider = provider
+        }
+        
+        print("🎯 Selected provider: \(selectedProvider)")
+        
+        // Start with selected provider
+        switch selectedProvider {
+        case "assemblyai":
+            if let key = UserDefaults.standard.string(forKey: "assemblyaiKey"), !key.isEmpty {
+                startAssemblyAIStreaming()
+            } else {
+                print("⚠️ No AssemblyAI key, trying Deepgram")
+                startDeepgramStreaming()
+            }
+            
+        case "deepgram":
+            if let key = UserDefaults.standard.string(forKey: "deepgramKey"), !key.isEmpty {
+                startDeepgramStreaming()
+            } else {
+                print("⚠️ No Deepgram key, trying AssemblyAI")
+                startAssemblyAIStreaming()
+            }
+            
+        case "whisper":
+            startWhisperChunkedTranscription()
+            
+        default:
+            // Fallback chain: Deepgram -> AssemblyAI -> Whisper
+            if let key = UserDefaults.standard.string(forKey: "deepgramKey"), !key.isEmpty {
+                startDeepgramStreaming()
+            } else if let key = UserDefaults.standard.string(forKey: "assemblyaiKey"), !key.isEmpty {
+                startAssemblyAIStreaming()
+            } else {
+                startWhisperChunkedTranscription()
+            }
+        }
+    }
+    
+    // MARK: - AssemblyAI Streaming
+    private func startAssemblyAIStreaming() {
+        guard let assemblyaiKey = UserDefaults.standard.string(forKey: "assemblyaiKey"),
+              !assemblyaiKey.isEmpty else {
+            print("⚠️ No AssemblyAI key, falling back to Deepgram")
+            startDeepgramStreaming()
+            return
+        }
+        
+        print("🎙️ Starting AssemblyAI WebSocket streaming...")
+        
+        // AssemblyAI v3 WebSocket URL with parameters
+        // Always use multilingual model with language detection for mixed-language meetings
+        var urlComponents = URLComponents(string: "wss://streaming.assemblyai.com/v3/ws")!
+        urlComponents.queryItems = [
+            URLQueryItem(name: "sample_rate", value: "16000"),
+            URLQueryItem(name: "speech_model", value: "universal-streaming-multilingual"),
+            URLQueryItem(name: "language_detection", value: "true"),
+            URLQueryItem(name: "format_turns", value: "true")
+        ]
+        
+        guard let url = urlComponents.url else {
+            print("❌ Invalid AssemblyAI URL")
+            startDeepgramStreaming()
+            return
+        }
+        
+        print("🌍 Using multilingual model with auto language detection")
+        print("📡 WebSocket URL: \(url.absoluteString)")
+        
+        var request = URLRequest(url: url)
+        request.setValue(assemblyaiKey, forHTTPHeaderField: "Authorization")
+        
+        let config = URLSessionConfiguration.default
+        assemblyaiSession = URLSession(configuration: config, delegate: self, delegateQueue: OperationQueue())
+        assemblyaiWebSocket = assemblyaiSession?.webSocketTask(with: request)
+        
+        // Start receiving messages
+        receiveAssemblyAIMessage()
+        
+        // Connect
+        assemblyaiWebSocket?.resume()
+        
+        // Start audio recording and streaming
+        startAudioStreamingToAssemblyAI()
+    }
+    
+    private func startAudioStreamingToAssemblyAI() {
+        print("🎤 Starting audio streaming to AssemblyAI...")
+        
+        let audioFilename = getDocumentsDirectory().appendingPathComponent("recording_\(Date().timeIntervalSince1970).wav")
+        recordingURL = audioFilename
+        
+        // AssemblyAI requires PCM16 audio at 16kHz
+        let settings: [String: Any] = [
+            AVFormatIDKey: Int(kAudioFormatLinearPCM),
+            AVSampleRateKey: 16000,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false
+        ]
+        
+        do {
+            audioRecorder = try AVAudioRecorder(url: audioFilename, settings: settings)
+            audioRecorder?.record()
+            isRecording = true
+            connectionStatus = "Recording (AssemblyAI)..."
+            assemblyaiAudioPosition = 0
+            print("✅ Audio recording started, streaming to AssemblyAI")
+            
+            // Stream audio chunks every 100ms
+            Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
+                guard let self = self, self.isRecording else {
+                    timer.invalidate()
+                    return
+                }
+                self.sendAudioChunkToAssemblyAI()
+            }
+        } catch {
+            connectionStatus = "Failed to start recording: \(error.localizedDescription)"
+            print("❌ Recording error: \(error)")
+            startDeepgramStreaming()
+        }
+    }
+    
+    private func sendAudioChunkToAssemblyAI() {
+        guard let audioURL = recordingURL else {
+            return
+        }
+        
+        do {
+            // Read entire audio file
+            let audioData = try Data(contentsOf: audioURL)
+            
+            // Only send new data since last position
+            guard audioData.count > assemblyaiAudioPosition else {
+                return
+            }
+            
+            let newData = audioData.subdata(in: assemblyaiAudioPosition..<audioData.count)
+            assemblyaiAudioPosition = audioData.count
+            
+            // Send as base64 in JSON format as per AssemblyAI docs
+            let base64Audio = newData.base64EncodedString()
+            let json: [String: Any] = ["audio_data": base64Audio]
+            
+            if let jsonData = try? JSONSerialization.data(withJSONObject: json),
+               let jsonString = String(data: jsonData, encoding: .utf8) {
+                let message = URLSessionWebSocketTask.Message.string(jsonString)
+                assemblyaiWebSocket?.send(message) { error in
+                    if let error = error {
+                        print("❌ Failed to send audio to AssemblyAI: \(error)")
+                    }
+                }
+            }
+        } catch {
+            print("❌ Error reading audio file: \(error)")
+        }
+    }
+    
+    private func receiveAssemblyAIMessage() {
+        assemblyaiWebSocket?.receive { [weak self] result in
+            switch result {
+            case .success(let message):
+                switch message {
+                case .string(let text):
+                    self?.handleAssemblyAIResponse(text)
+                case .data(let data):
+                    if let text = String(data: data, encoding: .utf8) {
+                        self?.handleAssemblyAIResponse(text)
+                    }
+                @unknown default:
+                    break
+                }
+                self?.receiveAssemblyAIMessage()
+                
+            case .failure(let error):
+                print("❌ AssemblyAI WebSocket error: \(error)")
+                DispatchQueue.main.async {
+                    self?.startDeepgramStreaming()
+                }
+            }
+        }
+    }
+    
+    private func handleAssemblyAIResponse(_ jsonString: String) {
+        guard let data = jsonString.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return
+        }
+        
+        // Check message type (as per official docs)
+        guard let messageType = json["type"] as? String else {
+            return
+        }
+        
+        switch messageType {
+        case "Begin":
+            // Session started
+            if let sessionId = json["id"] as? String {
+                print("✅ AssemblyAI session started: \(sessionId)")
+                DispatchQueue.main.async {
+                    self.connectionStatus = "Recording (AssemblyAI - Multilingual)..."
+                }
+            }
+            
+        case "Turn":
+            // Turn object with transcript
+            if let transcript = json["transcript"] as? String, !transcript.isEmpty {
+                let endOfTurn = json["end_of_turn"] as? Bool ?? false
+                let turnIsFormatted = json["turn_is_formatted"] as? Bool ?? false
+                
+                // Language detection info
+                let languageCode = json["language_code"] as? String
+                let languageConfidence = json["language_confidence"] as? Double
+                
+                if let lang = languageCode, let conf = languageConfidence {
+                    print("🌍 Detected language: \(lang) (confidence: \(String(format: "%.0f%%", conf * 100)))")
+                }
+                
+                DispatchQueue.main.async {
+                    if endOfTurn && turnIsFormatted {
+                        // Final formatted transcript
+                        self.transcriptBuffer += (self.transcriptBuffer.isEmpty ? "" : " ") + transcript
+                        self.transcript = self.transcriptBuffer
+                        print("✅ AssemblyAI final (formatted): \(transcript)")
+                    } else if endOfTurn {
+                        // Final unformatted transcript
+                        self.transcriptBuffer += (self.transcriptBuffer.isEmpty ? "" : " ") + transcript
+                        self.transcript = self.transcriptBuffer
+                        print("✅ AssemblyAI final: \(transcript)")
+                    } else {
+                        // Interim result - show but don't add to buffer yet
+                        let currentBuffer = self.transcriptBuffer
+                        let preview = currentBuffer + (currentBuffer.isEmpty ? "" : " ") + transcript
+                        self.transcript = preview
+                        print("📝 AssemblyAI interim: \(transcript.prefix(50))...")
+                    }
+                }
+            }
+            
+        case "Termination":
+            // Session ended
+            if let audioDuration = json["audio_duration_seconds"] as? Double {
+                print("✅ AssemblyAI session terminated: \(audioDuration)s processed")
+            }
+            
+        case "Error":
+            // Error occurred
+            if let errorMessage = json["error"] as? String {
+                print("❌ AssemblyAI error: \(errorMessage)")
+                DispatchQueue.main.async {
+                    self.startDeepgramStreaming()
+                }
+            }
+            
+        default:
+            print("⚠️ Unknown AssemblyAI message type: \(messageType)")
+        }
+    }
+    
+    private func startDeepgramStreaming() {
+        guard let deepgramKey = UserDefaults.standard.string(forKey: "deepgramKey"),
+              !deepgramKey.isEmpty else {
+            print("⚠️ No Deepgram key, falling back to AssemblyAI")
+            startAssemblyAIStreaming()
+            return
+        }
+        
+        print("🎙️ Starting Deepgram WebSocket streaming...")
+        
+        // Deepgram WebSocket URL with parameters
+        // Use "multi" for automatic language detection
+        var urlComponents = URLComponents(string: "wss://api.deepgram.com/v1/listen")!
+        urlComponents.queryItems = [
+            URLQueryItem(name: "encoding", value: "linear16"),
+            URLQueryItem(name: "sample_rate", value: "16000"),
+            URLQueryItem(name: "channels", value: "1"),
+            URLQueryItem(name: "model", value: "nova-2"),
+            URLQueryItem(name: "language", value: "multi"), // Automatic language detection
+            URLQueryItem(name: "detect_language", value: "true"),
+            URLQueryItem(name: "punctuate", value: "true"),
+            URLQueryItem(name: "interim_results", value: "true"),
+            URLQueryItem(name: "endpointing", value: "300") // 300ms silence detection
+        ]
+        
+        guard let url = urlComponents.url else {
+            print("❌ Invalid Deepgram URL")
+            startAssemblyAIStreaming()
+            return
+        }
+        
+        print("🌍 Using Deepgram with automatic language detection")
+        print("📡 WebSocket URL: \(url.absoluteString)")
+        
+        // Create WebSocket session
+        var request = URLRequest(url: url)
+        request.setValue("Token \(deepgramKey)", forHTTPHeaderField: "Authorization")
+        
+        let config = URLSessionConfiguration.default
+        deepgramSession = URLSession(configuration: config, delegate: self, delegateQueue: OperationQueue())
+        deepgramWebSocket = deepgramSession?.webSocketTask(with: request)
+        
+        // Start receiving messages
+        receiveDeepgramMessage()
+        
+        // Connect
+        deepgramWebSocket?.resume()
+        
+        // Start audio recording and streaming
+        startAudioStreamingToDeepgram()
+    }
+    
+    private func startAudioStreamingToDeepgram() {
+        print("🎤 Starting audio streaming to Deepgram...")
+        
+        // Setup audio recording
+        let audioFilename = getDocumentsDirectory().appendingPathComponent("recording_\(Date().timeIntervalSince1970).wav")
+        recordingURL = audioFilename
+        
+        // Deepgram requires PCM16 audio
+        let settings: [String: Any] = [
+            AVFormatIDKey: Int(kAudioFormatLinearPCM),
+            AVSampleRateKey: 16000,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false
+        ]
+        
+        do {
+            audioRecorder = try AVAudioRecorder(url: audioFilename, settings: settings)
+            audioRecorder?.record()
+            isRecording = true
+            connectionStatus = "Recording (Deepgram)..."
+            deepgramAudioPosition = 0
+            print("✅ Audio recording started, streaming to Deepgram")
+            
+            // Stream audio chunks to Deepgram every 100ms
+            Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
+                guard let self = self, self.isRecording else {
+                    timer.invalidate()
+                    return
+                }
+                
+                self.sendAudioChunkToDeepgram()
+            }
+            
+            // Send KeepAlive messages every 5 seconds to maintain connection during silence
+            deepgramKeepAliveTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] timer in
+                guard let self = self, self.isRecording else {
+                    timer.invalidate()
+                    return
+                }
+                
+                // Send KeepAlive message (empty JSON object)
+                let keepAlive = "{\"type\": \"KeepAlive\"}"
+                self.deepgramWebSocket?.send(.string(keepAlive)) { error in
+                    if let error = error {
+                        print("⚠️ Failed to send KeepAlive to Deepgram: \(error)")
+                    }
+                }
+            }
+        } catch {
+            connectionStatus = "Failed to start recording: \(error.localizedDescription)"
+            print("❌ Recording error: \(error)")
+            // Fallback to Whisper
+            startWhisperChunkedTranscription()
+        }
+    }
+    
+    private func sendAudioChunkToDeepgram() {
+        guard let audioURL = recordingURL else {
+            return
+        }
+        
+        do {
+            // Read entire audio file
+            let audioData = try Data(contentsOf: audioURL)
+            
+            // Only send new data since last position
+            guard audioData.count > deepgramAudioPosition else {
+                return
+            }
+            
+            let newData = audioData.subdata(in: deepgramAudioPosition..<audioData.count)
+            deepgramAudioPosition = audioData.count
+            
+            // Send raw PCM audio data (not base64, not JSON)
+            let message = URLSessionWebSocketTask.Message.data(newData)
+            deepgramWebSocket?.send(message) { error in
+                if let error = error {
+                    print("❌ Failed to send audio to Deepgram: \(error)")
+                }
+            }
+        } catch {
+            print("❌ Error reading audio file: \(error)")
+        }
+    }
+    
+    private func receiveDeepgramMessage() {
+        deepgramWebSocket?.receive { [weak self] result in
+            switch result {
+            case .success(let message):
+                switch message {
+                case .string(let text):
+                    self?.handleDeepgramResponse(text)
+                case .data(let data):
+                    if let text = String(data: data, encoding: .utf8) {
+                        self?.handleDeepgramResponse(text)
+                    }
+                @unknown default:
+                    break
+                }
+                
+                // Continue receiving
+                self?.receiveDeepgramMessage()
+                
+            case .failure(let error):
+                print("❌ Deepgram WebSocket error: \(error)")
+                // Fallback to Whisper
+                DispatchQueue.main.async {
+                    self?.startWhisperChunkedTranscription()
+                }
+            }
+        }
+    }
+    
+    private func handleDeepgramResponse(_ jsonString: String) {
+        guard let data = jsonString.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return
+        }
+        
+        // Check message type
+        guard let messageType = json["type"] as? String else {
+            return
+        }
+        
+        // Handle different message types
+        switch messageType {
+        case "Results":
+            // Parse Deepgram transcription response
+            if let channel = json["channel"] as? [String: Any],
+               let alternatives = channel["alternatives"] as? [[String: Any]],
+               let firstAlternative = alternatives.first,
+               let transcript = firstAlternative["transcript"] as? String,
+               !transcript.isEmpty {
+                
+                let isFinal = json["is_final"] as? Bool ?? false
+                let speechFinal = json["speech_final"] as? Bool ?? false
+                
+                // Language detection
+                if let detectedLanguage = firstAlternative["detected_language"] as? String {
+                    print("🌍 Deepgram detected language: \(detectedLanguage)")
+                }
+                
+                DispatchQueue.main.async {
+                    if speechFinal {
+                        // Speech turn ended - add to buffer
+                        self.transcriptBuffer += (self.transcriptBuffer.isEmpty ? "" : " ") + transcript
+                        self.transcript = self.transcriptBuffer
+                        print("✅ Deepgram speech final: \(transcript)")
+                    } else if isFinal {
+                        // Final transcript but speech continues
+                        self.transcriptBuffer += (self.transcriptBuffer.isEmpty ? "" : " ") + transcript
+                        self.transcript = self.transcriptBuffer
+                        print("✅ Deepgram final: \(transcript)")
+                    } else {
+                        // Interim result - show preview
+                        let currentBuffer = self.transcriptBuffer
+                        let preview = currentBuffer + (currentBuffer.isEmpty ? "" : " ") + transcript
+                        self.transcript = preview
+                        print("📝 Deepgram interim: \(transcript.prefix(50))...")
+                    }
+                }
+            }
+            
+        case "Metadata":
+            // Connection metadata
+            if let requestId = json["request_id"] as? String {
+                print("✅ Deepgram connection established: \(requestId)")
+            }
+            
+        case "UtteranceEnd":
+            // Utterance ended
+            print("🔚 Deepgram utterance ended")
+            
+        default:
+            print("⚠️ Unknown Deepgram message type: \(messageType)")
+        }
+    }
+    
+    private func startWhisperChunkedTranscription() {
+        print("🎤 Starting Whisper chunked transcription...")
+        
+        // Setup audio recording to file
+        let audioFilename = getDocumentsDirectory().appendingPathComponent("recording_\(Date().timeIntervalSince1970).m4a")
+        recordingURL = audioFilename
+        
+        let settings: [String: Any] = [
+            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+            AVSampleRateKey: 16000,
+            AVNumberOfChannelsKey: 1,
+            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+        ]
+        
+        do {
+            audioRecorder = try AVAudioRecorder(url: audioFilename, settings: settings)
+            audioRecorder?.record()
+            isRecording = true
+            connectionStatus = "Recording..."
+            print("✅ Audio recording started")
+            
+            // Start periodic Whisper transcription (every 5 seconds)
+            startPeriodicWhisperTranscription()
+        } catch {
+            connectionStatus = "Failed to start recording: \(error.localizedDescription)"
+            print("❌ Recording error: \(error)")
+        }
+    }
+    
+    private func startPeriodicWhisperTranscription() {
+        // Send audio to Whisper API every 5 seconds for transcription
+        Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] timer in
+            guard let self = self, self.isRecording else {
+                timer.invalidate()
+                return
+            }
+            
+            // Pause recording temporarily
+            self.audioRecorder?.pause()
+            
+            // Send current audio to Whisper
+            if let audioURL = self.recordingURL {
+                self.transcribeWithWhisper(audioURL: audioURL)
+            }
+            
+            // Resume recording
+            self.audioRecorder?.record()
+        }
+    }
+    
+    private func transcribeWithWhisper(audioURL: URL) {
+        guard let openaiKey = UserDefaults.standard.string(forKey: "openaiKey"),
+              !openaiKey.isEmpty else {
+            print("⚠️ No OpenAI key configured")
+            return
+        }
+        
+        print("📤 Sending audio to Whisper API...")
+        
+        let url = URL(string: "https://api.openai.com/v1/audio/transcriptions")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(openaiKey)", forHTTPHeaderField: "Authorization")
+        
+        let boundary = UUID().uuidString
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        
+        var body = Data()
+        
+        // Add model parameter
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"model\"\r\n\r\n".data(using: .utf8)!)
+        body.append("whisper-1\r\n".data(using: .utf8)!)
+        
+        // Add language parameter
+        let language = getLanguageCode().prefix(2) // "en-US" -> "en"
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"language\"\r\n\r\n".data(using: .utf8)!)
+        body.append("\(language)\r\n".data(using: .utf8)!)
+        
+        // Add audio file
+        if let audioData = try? Data(contentsOf: audioURL) {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"file\"; filename=\"audio.m4a\"\r\n".data(using: .utf8)!)
+            body.append("Content-Type: audio/m4a\r\n\r\n".data(using: .utf8)!)
+            body.append(audioData)
+            body.append("\r\n".data(using: .utf8)!)
+        }
+        
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+        request.httpBody = body
+        
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            if let error = error {
+                print("❌ Whisper API error: \(error)")
+                return
+            }
+            
+            guard let data = data else {
+                print("❌ No data received from Whisper")
+                return
+            }
+            
+            do {
+                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let text = json["text"] as? String {
+                    DispatchQueue.main.async {
+                        self?.transcriptBuffer = text
+                        self?.transcript = text
+                        print("✅ Whisper transcription: \(text.prefix(100))...")
+                    }
+                }
+            } catch {
+                print("❌ Failed to parse Whisper response: \(error)")
+            }
+        }.resume()
+    }
+    
+    private func getDocumentsDirectory() -> URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     }
     
     func stopRecording() {
@@ -408,20 +966,40 @@ class AudioRecorder: NSObject, ObservableObject {
         // Stop timers
         transcriptionTimer?.invalidate()
         insightsTimer?.invalidate()
+        deepgramKeepAliveTimer?.invalidate()
         
-        // Stop audio engine
-        if audioEngine.isRunning {
-            audioEngine.stop()
-            audioEngine.inputNode.removeTap(onBus: 0)
+        // Send termination message to AssemblyAI before closing
+        if let webSocket = assemblyaiWebSocket {
+            let terminateMessage = "{\"type\": \"Terminate\"}"
+            webSocket.send(.string(terminateMessage)) { error in
+                if let error = error {
+                    print("⚠️ Failed to send termination to AssemblyAI: \(error)")
+                }
+            }
+            // Give it a moment to send, then close
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                webSocket.cancel(with: .goingAway, reason: nil)
+            }
+            assemblyaiWebSocket = nil
         }
         
-        // End recognition
-        recognitionRequest?.endAudio()
-        recognitionTask?.cancel()
+        // Send close message to Deepgram before closing
+        if let webSocket = deepgramWebSocket {
+            let closeMessage = "{\"type\": \"CloseStream\"}"
+            webSocket.send(.string(closeMessage)) { error in
+                if let error = error {
+                    print("⚠️ Failed to send close to Deepgram: \(error)")
+                }
+            }
+            // Give it a moment to send, then close
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                webSocket.cancel(with: .goingAway, reason: nil)
+            }
+            deepgramWebSocket = nil
+        }
         
-        // Clean up
-        recognitionRequest = nil
-        recognitionTask = nil
+        // Stop audio recorder
+        audioRecorder?.stop()
         
         isRecording = false
         
@@ -435,6 +1013,11 @@ class AudioRecorder: NSObject, ObservableObject {
         
         // Process final transcript and insights
         processFinalTranscript()
+        
+        // Clean up audio file
+        if let audioURL = recordingURL {
+            try? FileManager.default.removeItem(at: audioURL)
+        }
     }
     
     // MARK: - Permission Management
@@ -461,158 +1044,6 @@ class AudioRecorder: NSObject, ObservableObject {
         @unknown default:
             print("❓ Unknown microphone status")
             completion(false)
-        }
-    }
-    
-    // MARK: - Audio Recording
-    private func startAudioRecording() {
-        print("🎤 startAudioRecording() called")
-        
-        // For now, use Speech Framework (OpenAI Whisper can be added later)
-        startSpeechFrameworkRecording()
-    }
-    
-    private func startSpeechFrameworkRecording() {
-        print("🎤 Starting Speech Framework recording...")
-        
-        // Log current language settings
-        let currentLanguage = getLanguageCode()
-        print("🌍 Current language code: \(currentLanguage)")
-        print("🌍 Speech recognizer locale: \(speechRecognizer?.locale.identifier ?? "nil")")
-        
-        // Log selected audio device
-        let selectedDevice = UserDefaults.standard.string(forKey: "inputDeviceId") ?? "default"
-        print("🎧 Selected audio device: \(selectedDevice)")
-        
-        // Check if Speech Recognition is available
-        guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
-            connectionStatus = "Speech recognition not available for selected language"
-            print("❌ Speech recognizer not available for language: \(currentLanguage)")
-            print("💡 Try changing language in settings or check if \(currentLanguage) is supported")
-            return
-        }
-        
-        print("✅ Speech recognizer available for: \(speechRecognizer.locale.identifier)")
-        
-        // Check authorization
-        let authStatus = SFSpeechRecognizer.authorizationStatus()
-        guard authStatus == .authorized else {
-            connectionStatus = "Speech recognition not authorized - enable in System Settings"
-            print("❌ Speech recognition not authorized: \(authStatus)")
-            return
-        }
-        
-        // Reset previous session
-        if audioEngine.isRunning {
-            print("🎤 Stopping previous audio engine...")
-            audioEngine.stop()
-            audioEngine.inputNode.removeTap(onBus: 0)
-            recognitionRequest?.endAudio()
-        }
-        
-        // ВАЖНО: НЕ меняем системный default device!
-        // Вместо этого используем выбранный device только для AVAudioEngine
-        if selectedDevice != "default" {
-            // Просто логируем, но НЕ устанавливаем как системный default
-            if let deviceName = findDeviceName(deviceId: selectedDevice) {
-                print("🎧 Will try to use device: \(deviceName)")
-            }
-        } else {
-            print("🎧 Using system default audio input device")
-            logCurrentAudioDevice()
-        }
-        
-        // Setup recognition request
-        recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        guard let recognitionRequest = recognitionRequest else {
-            connectionStatus = "Unable to create recognition request"
-            print("❌ Failed to create recognition request")
-            return
-        }
-        
-        recognitionRequest.shouldReportPartialResults = true
-        recognitionRequest.requiresOnDeviceRecognition = false
-        
-        // Add context for better recognition
-        if #available(macOS 13.0, *) {
-            recognitionRequest.addsPunctuation = true
-        }
-        
-        // Setup audio input with larger buffer for better quality
-        let inputNode = audioEngine.inputNode
-        let recordingFormat = inputNode.outputFormat(forBus: 0)
-        
-        // Ensure we have a valid format
-        guard recordingFormat.sampleRate > 0 && recordingFormat.channelCount > 0 else {
-            connectionStatus = "Invalid audio format"
-            print("❌ Invalid audio format: \(recordingFormat)")
-            return
-        }
-        
-        print("🎤 Audio format: \(recordingFormat.sampleRate)Hz, \(recordingFormat.channelCount) channels")
-        print("🎤 Buffer size: 4096 samples")
-        
-        // Increased buffer size for better audio capture (4096 instead of 1024)
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: recordingFormat) { buffer, _ in
-            recognitionRequest.append(buffer)
-        }
-        
-        // Start recognition task
-        recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
-            DispatchQueue.main.async {
-                if let result = result {
-                    let newTranscript = result.bestTranscription.formattedString
-                    
-                    // Filter out phantom/hallucination text
-                    if let strongSelf = self, !strongSelf.isPhantomTranscript(newTranscript) {
-                        // Update buffer for smart processing
-                        strongSelf.transcriptBuffer = newTranscript
-                        
-                        // ALSO update the published transcript immediately for live feedback
-                        strongSelf.transcript = newTranscript
-                        
-                        print("🎤 Transcript updated: \(newTranscript.count) chars - \(newTranscript.prefix(50))...")
-                    }
-                }
-                
-                if let error = error {
-                    print("❌ Speech recognition error: \(error)")
-                    if !error.localizedDescription.contains("cancelled") {
-                        self?.connectionStatus = "Recognition error: \(error.localizedDescription)"
-                    }
-                }
-            }
-        }
-        
-        // Start audio engine
-        audioEngine.prepare()
-        do {
-            try audioEngine.start()
-            isRecording = true
-            connectionStatus = "Recording (Speech Framework)..."
-            print("✅ Speech Framework recording started successfully")
-            print("🎧 Recording from: \(getActiveAudioDeviceName())")
-        } catch {
-            let errorMsg = "Audio engine start failed: \(error.localizedDescription)"
-            connectionStatus = errorMsg
-            print("❌ Audio engine error: \(error)")
-            print("❌ Error details: \(error)")
-            
-            // Try to provide more helpful error message
-            if error.localizedDescription.contains("561015905") {
-                connectionStatus = "Audio device error - check Settings"
-                print("💡 This usually means the selected audio device is not available")
-            }
-            
-            // Show alert to user
-            DispatchQueue.main.async {
-                let alert = NSAlert()
-                alert.messageText = "Recording Failed"
-                alert.informativeText = errorMsg
-                alert.alertStyle = .warning
-                alert.addButton(withTitle: "OK")
-                alert.runModal()
-            }
         }
     }
     
@@ -834,18 +1265,24 @@ class AudioRecorder: NSObject, ObservableObject {
         // Always use gpt-5-nano for live insights (most cost-effective)
         let model = "gpt-5-nano"
         
+        // Get system language for translation
+        let systemLanguage = Locale.current.language.languageCode?.identifier ?? "en"
+        let systemLanguageName = Locale.current.localizedString(forLanguageCode: systemLanguage) ?? "English"
+        
         // Truncate transcript to control token usage - even more aggressive for nano
         let truncatedTranscript = String(transcript.suffix(maxTokensPerInsightRequest * 2)) // More aggressive truncation
         
         let prompt = """
-        Meeting analysis (JSON only):
+        Meeting analysis (JSON only, respond in \(systemLanguageName)):
         {
-          "topic": "main topic (3 words)",
+          "topic": "main topic (3 words in \(systemLanguageName))",
           "points": ["key1", "key2"],
           "actions": ["action1", "action2"],
           "mood": "positive/neutral/negative",
           "keywords": ["keyword1", "keyword2", "keyword3"]
         }
+        
+        Note: Text may contain multiple languages. Analyze and respond in \(systemLanguageName).
         
         Text: \(truncatedTranscript)
         """
@@ -857,7 +1294,7 @@ class AudioRecorder: NSObject, ObservableObject {
                     self?.liveInsights = insights
                     self?.insightsCache["lastProcessedLength"] = transcript.count
                     self?.insightsCache["lastInsights"] = insights
-                    print("✅ Generated live insights: \(insights.prefix(100))...")
+                    print("✅ Generated multilingual live insights: \(insights.prefix(100))...")
                     
                 case .failure(let error):
                     print("❌ Insights generation failed: \(error)")
@@ -888,6 +1325,10 @@ class AudioRecorder: NSObject, ObservableObject {
         let selectedModel = UserDefaults.standard.string(forKey: "selectedModel") ?? "gpt-5-nano"
         let model = selectedModel
         
+        // Get system language for translation
+        let systemLanguage = Locale.current.language.languageCode?.identifier ?? "en"
+        let systemLanguageName = Locale.current.localizedString(forLanguageCode: systemLanguage) ?? "English"
+        
         // Adjust tokens based on model
         let maxTokens: Int
         switch model {
@@ -898,13 +1339,19 @@ class AudioRecorder: NSObject, ObservableObject {
         }
         
         let prompt = """
-        Analyze this meeting/conversation and provide structured insights in JSON format:
+        Analyze this meeting/conversation and provide structured insights in JSON format.
+        
+        IMPORTANT: The transcript may contain multiple languages (e.g., English + Russian + Korean).
+        - Analyze the content in whatever languages are present
+        - Provide ALL responses in \(systemLanguageName) (\(systemLanguage))
+        - Translate any non-\(systemLanguageName) content to \(systemLanguageName) in your analysis
+        - Preserve the original meaning and context when translating
 
         {
-          "summary": "1-2 paragraph comprehensive summary of the main discussion",
+          "summary": "1-2 paragraph comprehensive summary of the main discussion (in \(systemLanguageName))",
           "action_items": [
             {
-              "task": "Specific action to take",
+              "task": "Specific action to take (in \(systemLanguageName))",
               "assignee": "Person responsible (if mentioned)",
               "deadline": "Timeframe (if mentioned)",
               "priority": "high/medium/low",
@@ -916,18 +1363,19 @@ class AudioRecorder: NSObject, ObservableObject {
             }
           ],
           "key_insights": [
-            "Important insight or observation from the conversation"
+            "Important insight or observation from the conversation (in \(systemLanguageName))"
           ],
           "topics_discussed": ["topic1", "topic2", "topic3"],
           "decisions_made": ["decision1", "decision2"],
           "questions_raised": ["question1", "question2"],
           "sentiment": "overall mood: positive/neutral/negative/mixed",
           "keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"],
+          "languages_detected": ["list of languages spoken in the meeting"],
           "company_mentioned": "Company name if mentioned, otherwise null",
           "meeting_type": "Type of meeting: standup/planning/review/sales/support/interview/other"
         }
 
-        Transcript:
+        Transcript (may contain multiple languages):
         \(transcript)
         """
         
@@ -937,7 +1385,7 @@ class AudioRecorder: NSObject, ObservableObject {
                 case .success(let analysis):
                     self?.liveInsights = analysis
                     self?.connectionStatus = "Ready"
-                    print("✅ Generated final analysis with \(model)")
+                    print("✅ Generated multilingual analysis with \(model)")
                     
                 case .failure(let error):
                     self?.connectionStatus = "Ready"
