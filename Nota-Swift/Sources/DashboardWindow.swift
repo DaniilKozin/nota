@@ -1155,7 +1155,6 @@ struct MetadataItem: View {
 struct SettingsTabView: View {
     @ObservedObject var audioRecorder: AudioRecorder
     @AppStorage("openaiKey") private var openaiKey = ""
-    @AppStorage("deepgramKey") private var deepgramKey = ""
     @AppStorage("assemblyaiKey") private var assemblyaiKey = "bcacd502bfd640bd817306c3e35a3626"
     @AppStorage("transcriptionProvider") private var transcriptionProvider = "auto"
     @AppStorage("selectedModel") private var selectedModel = "gpt-5-nano"
@@ -1185,13 +1184,6 @@ struct SettingsTabView: View {
                             .textFieldStyle(.roundedBorder)
                     }
                     
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Deepgram API Key (Optional)")
-                            .font(.subheadline)
-                        SecureField("Optional", text: $deepgramKey)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                    
                     Picker("AI Model", selection: $selectedModel) {
                         Text("GPT-5 Nano (Recommended)").tag("gpt-5-nano")
                         Text("GPT-5 Mini").tag("gpt-5-mini")
@@ -1202,13 +1194,16 @@ struct SettingsTabView: View {
                 Section(header: Text("Audio & Language").font(.headline)) {
                     Picker("Input Device", selection: $inputDeviceId) {
                         Text("Default").tag("default")
-                        ForEach(audioRecorder.availableDevices, id: \.id) { device in
-                            Text(device.name).tag(device.id)
+                        if !audioRecorder.availableDevices.isEmpty {
+                            ForEach(audioRecorder.availableDevices, id: \.id) { device in
+                                Text(device.name).tag(device.id)
+                            }
                         }
                     }
                     .onChange(of: inputDeviceId) { _ in
                         audioRecorder.updateSettings()
                     }
+                    .disabled(audioRecorder.isRecording) // Disable during recording
                     
                     Picker("Language", selection: $outputLanguage) {
                         ForEach(audioRecorder.getSupportedLanguages(), id: \.code) { language in
@@ -1222,7 +1217,6 @@ struct SettingsTabView: View {
                     Picker("Transcription Provider", selection: $transcriptionProvider) {
                         Text("Auto (AssemblyAI - 99 Languages)").tag("auto")
                         Text("AssemblyAI (99 Languages)").tag("assemblyai")
-                        Text("Deepgram (30+ Languages)").tag("deepgram")
                         Text("OpenAI Whisper (Fallback)").tag("whisper")
                     }
                     .onChange(of: transcriptionProvider) { _ in
@@ -1244,13 +1238,6 @@ struct SettingsTabView: View {
                         Text("Default key included (99 languages, $0.27/hour)")
                             .font(.caption2)
                             .foregroundColor(.secondary)
-                    }
-                    
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Deepgram API Key (Optional)")
-                            .font(.subheadline)
-                        SecureField("Optional - alternative provider", text: $deepgramKey)
-                            .textFieldStyle(.roundedBorder)
                     }
                     
                     Button("Refresh Devices") {
@@ -1298,9 +1285,14 @@ struct SettingsTabView: View {
             .padding(.horizontal)
         }
         .onAppear {
-            // Only discover devices if not recording
+            // Skip device discovery entirely during recording to prevent crashes
             if !audioRecorder.isRecording {
-                audioRecorder.discoverAudioDevices()
+                // Delay device discovery slightly to avoid UI conflicts
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    if !audioRecorder.isRecording {
+                        audioRecorder.discoverAudioDevices()
+                    }
+                }
             }
         }
     }

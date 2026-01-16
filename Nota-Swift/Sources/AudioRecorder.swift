@@ -31,9 +31,11 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     private var selectedLanguage: String = "auto"
     private var transcriptionProvider: String = "auto"
     
-    // Audio recording for Whisper
-    private var audioRecorder: AVAudioRecorder?
+    // Audio recording with AVAudioEngine (supports device selection)
+    private var audioEngine: AVAudioEngine?
+    private var audioRecorder: AVAudioRecorder? // Fallback
     private var recordingURL: URL?
+    private var audioFile: AVAudioFile?
     
     // Smart transcription and insights management
     private var lastTranscriptUpdate = Date()
@@ -45,9 +47,9 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     private var insightsTimer: Timer?
     
     // Configuration for smart processing - optimized for GPT-5 nano
-    private let transcriptionInterval: TimeInterval = 6.0 // 6 seconds (slightly longer)
-    private let insightsInterval: TimeInterval = 45.0 // 45 seconds (more economical)
-    private let minTranscriptLengthForInsights = 120 // characters (slightly higher threshold)
+    private let transcriptionInterval: TimeInterval = 6.0 // 6 seconds
+    private let insightsInterval: TimeInterval = 30.0 // 30 seconds (faster updates)
+    private let minTranscriptLengthForInsights = 50 // characters (lower threshold for faster insights)
     private let maxTokensPerInsightRequest = 800 // reduced for nano model
     
     // Recording session tracking with DataManager
@@ -64,6 +66,10 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     override init() {
         super.init()
         loadSettings()
+        // Discover audio devices on init
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.discoverAudioDevices()
+        }
     }
     
     // Set data manager for saving recordings
@@ -204,12 +210,18 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     private func getLanguageCode() -> String {
         let outputLanguage = UserDefaults.standard.string(forKey: "outputLanguage") ?? "auto"
         
+        print("🌍 Output language setting: \(outputLanguage)")
+        
         switch outputLanguage {
         case "auto":
             // Auto-detect based on system language
             let systemLanguage = Locale.current.language.languageCode?.identifier ?? "en"
+            print("🌍 System language detected: \(systemLanguage)")
+            
             switch systemLanguage {
-            case "ru": return "ru-RU"
+            case "ru": 
+                print("🇷🇺 Using Russian (ru-RU)")
+                return "ru-RU"
             case "es": return "es-ES" 
             case "fr": return "fr-FR"
             case "de": return "de-DE"
@@ -230,7 +242,9 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
             case "hi": return "hi-IN"
             case "th": return "th-TH"
             case "vi": return "vi-VN"
-            default: return "en-US"
+            default: 
+                print("🇺🇸 Using English (en-US) as default")
+                return "en-US"
             }
         case "en": return "en-US"
         case "ru": return "ru-RU"
@@ -288,6 +302,7 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     
     // MARK: - Recording Control
     func startRecording() {
+        print("🔴 DEBUG: startRecording() вызвана")
         guard !isRecording else { 
             print("⚠️ Already recording, ignoring start request")
             return 
@@ -322,14 +337,10 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         }
     }
     
-    // MARK: - Streaming Transcription (Smart provider selection)
-    private var deepgramWebSocket: URLSessionWebSocketTask?
+    // MARK: - Streaming Transcription (AssemblyAI + Whisper)
     private var assemblyaiWebSocket: URLSessionWebSocketTask?
-    private var deepgramSession: URLSession?
     private var assemblyaiSession: URLSession?
     private var assemblyaiAudioPosition: Int = 0
-    private var deepgramAudioPosition: Int = 0
-    private var deepgramKeepAliveTimer: Timer?
     
     private func startStreamingTranscription() {
         let provider = UserDefaults.standard.string(forKey: "transcriptionProvider") ?? "auto"
@@ -337,12 +348,22 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         
         print("🎙️ Transcription provider: \(provider), language: \(language)")
         
+        // AssemblyAI Streaming only supports: English, Spanish, French, German, Italian, Portuguese
+        let assemblyAISupportedLanguages = ["en", "es", "fr", "de", "it", "pt"]
+        let languagePrefix = String(language.prefix(2))
+        let isAssemblyAISupported = assemblyAISupportedLanguages.contains(languagePrefix)
+        
         // Smart provider selection
         let selectedProvider: String
         if provider == "auto" {
-            // Auto mode: Use Deepgram for better multilingual support
-            // AssemblyAI multilingual has issues with real-time language switching
-            selectedProvider = "deepgram"
+            // Auto mode: Use AssemblyAI for supported languages, Whisper for others
+            if isAssemblyAISupported {
+                selectedProvider = "assemblyai"
+                print("✅ Language \(language) supported by AssemblyAI streaming")
+            } else {
+                selectedProvider = "whisper"
+                print("⚠️ Language \(language) NOT supported by AssemblyAI streaming, using Whisper")
+            }
         } else {
             selectedProvider = provider
         }
@@ -353,28 +374,23 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         switch selectedProvider {
         case "assemblyai":
             if let key = UserDefaults.standard.string(forKey: "assemblyaiKey"), !key.isEmpty {
-                startAssemblyAIStreaming()
+                if isAssemblyAISupported {
+                    startAssemblyAIStreaming()
+                } else {
+                    print("⚠️ AssemblyAI doesn't support \(language), using Whisper")
+                    startWhisperChunkedTranscription()
+                }
             } else {
-                print("⚠️ No AssemblyAI key, trying Deepgram")
-                startDeepgramStreaming()
-            }
-            
-        case "deepgram":
-            if let key = UserDefaults.standard.string(forKey: "deepgramKey"), !key.isEmpty {
-                startDeepgramStreaming()
-            } else {
-                print("⚠️ No Deepgram key, trying AssemblyAI")
-                startAssemblyAIStreaming()
+                print("⚠️ No AssemblyAI key, using Whisper")
+                startWhisperChunkedTranscription()
             }
             
         case "whisper":
             startWhisperChunkedTranscription()
             
         default:
-            // Fallback chain: Deepgram -> AssemblyAI -> Whisper
-            if let key = UserDefaults.standard.string(forKey: "deepgramKey"), !key.isEmpty {
-                startDeepgramStreaming()
-            } else if let key = UserDefaults.standard.string(forKey: "assemblyaiKey"), !key.isEmpty {
+            // Fallback chain: AssemblyAI (if supported) -> Whisper
+            if let key = UserDefaults.standard.string(forKey: "assemblyaiKey"), !key.isEmpty, isAssemblyAISupported {
                 startAssemblyAIStreaming()
             } else {
                 startWhisperChunkedTranscription()
@@ -386,30 +402,27 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     private func startAssemblyAIStreaming() {
         guard let assemblyaiKey = UserDefaults.standard.string(forKey: "assemblyaiKey"),
               !assemblyaiKey.isEmpty else {
-            print("⚠️ No AssemblyAI key, falling back to Deepgram")
-            startDeepgramStreaming()
+            print("⚠️ No AssemblyAI key, falling back to Whisper")
+            startWhisperChunkedTranscription()
             return
         }
         
-        print("🎙️ Starting AssemblyAI WebSocket streaming...")
+        print("🎙️ Starting AssemblyAI v3 WebSocket streaming...")
         
-        // AssemblyAI v3 WebSocket URL with parameters
-        // Always use multilingual model with language detection for mixed-language meetings
+        // AssemblyAI v3 WebSocket URL with connection parameters
+        // According to docs: wss://streaming.assemblyai.com/v3/ws?sample_rate=16000&...
         var urlComponents = URLComponents(string: "wss://streaming.assemblyai.com/v3/ws")!
         urlComponents.queryItems = [
-            URLQueryItem(name: "sample_rate", value: "16000"),
-            URLQueryItem(name: "speech_model", value: "universal-streaming-multilingual"),
-            URLQueryItem(name: "language_detection", value: "true"),
-            URLQueryItem(name: "format_turns", value: "true")
+            URLQueryItem(name: "sample_rate", value: "16000")
         ]
         
         guard let url = urlComponents.url else {
             print("❌ Invalid AssemblyAI URL")
-            startDeepgramStreaming()
+            startWhisperChunkedTranscription()
             return
         }
         
-        print("🌍 Using multilingual model with auto language detection")
+        print("🌍 Using universal-streaming-multilingual model (default)")
         print("📡 WebSocket URL: \(url.absoluteString)")
         
         var request = URLRequest(url: url)
@@ -424,6 +437,7 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         
         // Connect
         assemblyaiWebSocket?.resume()
+        print("✅ AssemblyAI WebSocket connecting...")
         
         // Start audio recording and streaming
         startAudioStreamingToAssemblyAI()
@@ -447,11 +461,31 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         
         do {
             audioRecorder = try AVAudioRecorder(url: audioFilename, settings: settings)
+            audioRecorder?.isMeteringEnabled = true
             audioRecorder?.record()
             isRecording = true
             connectionStatus = "Recording (AssemblyAI)..."
             assemblyaiAudioPosition = 0
-            print("✅ Audio recording started, streaming to AssemblyAI")
+            print("✅ Audio recording started to file: \(audioFilename.lastPathComponent)")
+            
+            // Monitor audio levels
+            Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] timer in
+                guard let self = self, self.isRecording else {
+                    timer.invalidate()
+                    return
+                }
+                
+                self.audioRecorder?.updateMeters()
+                let avgPower = self.audioRecorder?.averagePower(forChannel: 0) ?? -160
+                print("🎙️ Audio level: \(String(format: "%.1f", avgPower))dB")
+                
+                // Check file size
+                if let url = self.recordingURL,
+                   let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+                   let fileSize = attributes[.size] as? UInt64 {
+                    print("📁 File size: \(fileSize) bytes")
+                }
+            }
             
             // Stream audio chunks every 100ms
             Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
@@ -464,7 +498,7 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         } catch {
             connectionStatus = "Failed to start recording: \(error.localizedDescription)"
             print("❌ Recording error: \(error)")
-            startDeepgramStreaming()
+            startWhisperChunkedTranscription()
         }
     }
     
@@ -485,16 +519,16 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
             let newData = audioData.subdata(in: assemblyaiAudioPosition..<audioData.count)
             assemblyaiAudioPosition = audioData.count
             
-            // Send as base64 in JSON format as per AssemblyAI docs
-            let base64Audio = newData.base64EncodedString()
-            let json: [String: Any] = ["audio_data": base64Audio]
-            
-            if let jsonData = try? JSONSerialization.data(withJSONObject: json),
-               let jsonString = String(data: jsonData, encoding: .utf8) {
-                let message = URLSessionWebSocketTask.Message.string(jsonString)
-                assemblyaiWebSocket?.send(message) { error in
-                    if let error = error {
-                        print("❌ Failed to send audio to AssemblyAI: \(error)")
+            // Send RAW PCM audio data (not base64, not JSON!)
+            // AssemblyAI v3 expects binary PCM16 data directly
+            let message = URLSessionWebSocketTask.Message.data(newData)
+            assemblyaiWebSocket?.send(message) { error in
+                if let error = error {
+                    print("❌ Failed to send audio to AssemblyAI: \(error)")
+                } else {
+                    // Success - audio chunk sent
+                    if newData.count > 0 {
+                        print("📤 Sent \(newData.count) bytes to AssemblyAI")
                     }
                 }
             }
@@ -522,7 +556,7 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
             case .failure(let error):
                 print("❌ AssemblyAI WebSocket error: \(error)")
                 DispatchQueue.main.async {
-                    self?.startDeepgramStreaming()
+                    self?.startWhisperChunkedTranscription()
                 }
             }
         }
@@ -595,7 +629,7 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
             if let errorMessage = json["error"] as? String {
                 print("❌ AssemblyAI error: \(errorMessage)")
                 DispatchQueue.main.async {
-                    self.startDeepgramStreaming()
+                    self.startWhisperChunkedTranscription()
                 }
             }
             
@@ -604,238 +638,7 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         }
     }
     
-    private func startDeepgramStreaming() {
-        guard let deepgramKey = UserDefaults.standard.string(forKey: "deepgramKey"),
-              !deepgramKey.isEmpty else {
-            print("⚠️ No Deepgram key, falling back to AssemblyAI")
-            startAssemblyAIStreaming()
-            return
-        }
-        
-        print("🎙️ Starting Deepgram WebSocket streaming...")
-        
-        // Deepgram WebSocket URL with parameters
-        // Use "multi" for automatic language detection
-        var urlComponents = URLComponents(string: "wss://api.deepgram.com/v1/listen")!
-        urlComponents.queryItems = [
-            URLQueryItem(name: "encoding", value: "linear16"),
-            URLQueryItem(name: "sample_rate", value: "16000"),
-            URLQueryItem(name: "channels", value: "1"),
-            URLQueryItem(name: "model", value: "nova-2"),
-            URLQueryItem(name: "language", value: "multi"), // Automatic language detection
-            URLQueryItem(name: "detect_language", value: "true"),
-            URLQueryItem(name: "punctuate", value: "true"),
-            URLQueryItem(name: "interim_results", value: "true"),
-            URLQueryItem(name: "endpointing", value: "300") // 300ms silence detection
-        ]
-        
-        guard let url = urlComponents.url else {
-            print("❌ Invalid Deepgram URL")
-            startAssemblyAIStreaming()
-            return
-        }
-        
-        print("🌍 Using Deepgram with automatic language detection")
-        print("📡 WebSocket URL: \(url.absoluteString)")
-        
-        // Create WebSocket session
-        var request = URLRequest(url: url)
-        request.setValue("Token \(deepgramKey)", forHTTPHeaderField: "Authorization")
-        
-        let config = URLSessionConfiguration.default
-        deepgramSession = URLSession(configuration: config, delegate: self, delegateQueue: OperationQueue())
-        deepgramWebSocket = deepgramSession?.webSocketTask(with: request)
-        
-        // Start receiving messages
-        receiveDeepgramMessage()
-        
-        // Connect
-        deepgramWebSocket?.resume()
-        
-        // Start audio recording and streaming
-        startAudioStreamingToDeepgram()
-    }
-    
-    private func startAudioStreamingToDeepgram() {
-        print("🎤 Starting audio streaming to Deepgram...")
-        
-        // Setup audio recording
-        let audioFilename = getDocumentsDirectory().appendingPathComponent("recording_\(Date().timeIntervalSince1970).wav")
-        recordingURL = audioFilename
-        
-        // Deepgram requires PCM16 audio
-        let settings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatLinearPCM),
-            AVSampleRateKey: 16000,
-            AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsFloatKey: false,
-            AVLinearPCMIsBigEndianKey: false
-        ]
-        
-        do {
-            audioRecorder = try AVAudioRecorder(url: audioFilename, settings: settings)
-            audioRecorder?.record()
-            isRecording = true
-            connectionStatus = "Recording (Deepgram)..."
-            deepgramAudioPosition = 0
-            print("✅ Audio recording started, streaming to Deepgram")
-            
-            // Stream audio chunks to Deepgram every 100ms
-            Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
-                guard let self = self, self.isRecording else {
-                    timer.invalidate()
-                    return
-                }
-                
-                self.sendAudioChunkToDeepgram()
-            }
-            
-            // Send KeepAlive messages every 5 seconds to maintain connection during silence
-            deepgramKeepAliveTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] timer in
-                guard let self = self, self.isRecording else {
-                    timer.invalidate()
-                    return
-                }
-                
-                // Send KeepAlive message (empty JSON object)
-                let keepAlive = "{\"type\": \"KeepAlive\"}"
-                self.deepgramWebSocket?.send(.string(keepAlive)) { error in
-                    if let error = error {
-                        print("⚠️ Failed to send KeepAlive to Deepgram: \(error)")
-                    }
-                }
-            }
-        } catch {
-            connectionStatus = "Failed to start recording: \(error.localizedDescription)"
-            print("❌ Recording error: \(error)")
-            // Fallback to Whisper
-            startWhisperChunkedTranscription()
-        }
-    }
-    
-    private func sendAudioChunkToDeepgram() {
-        guard let audioURL = recordingURL else {
-            return
-        }
-        
-        do {
-            // Read entire audio file
-            let audioData = try Data(contentsOf: audioURL)
-            
-            // Only send new data since last position
-            guard audioData.count > deepgramAudioPosition else {
-                return
-            }
-            
-            let newData = audioData.subdata(in: deepgramAudioPosition..<audioData.count)
-            deepgramAudioPosition = audioData.count
-            
-            // Send raw PCM audio data (not base64, not JSON)
-            let message = URLSessionWebSocketTask.Message.data(newData)
-            deepgramWebSocket?.send(message) { error in
-                if let error = error {
-                    print("❌ Failed to send audio to Deepgram: \(error)")
-                }
-            }
-        } catch {
-            print("❌ Error reading audio file: \(error)")
-        }
-    }
-    
-    private func receiveDeepgramMessage() {
-        deepgramWebSocket?.receive { [weak self] result in
-            switch result {
-            case .success(let message):
-                switch message {
-                case .string(let text):
-                    self?.handleDeepgramResponse(text)
-                case .data(let data):
-                    if let text = String(data: data, encoding: .utf8) {
-                        self?.handleDeepgramResponse(text)
-                    }
-                @unknown default:
-                    break
-                }
-                
-                // Continue receiving
-                self?.receiveDeepgramMessage()
-                
-            case .failure(let error):
-                print("❌ Deepgram WebSocket error: \(error)")
-                // Fallback to Whisper
-                DispatchQueue.main.async {
-                    self?.startWhisperChunkedTranscription()
-                }
-            }
-        }
-    }
-    
-    private func handleDeepgramResponse(_ jsonString: String) {
-        guard let data = jsonString.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return
-        }
-        
-        // Check message type
-        guard let messageType = json["type"] as? String else {
-            return
-        }
-        
-        // Handle different message types
-        switch messageType {
-        case "Results":
-            // Parse Deepgram transcription response
-            if let channel = json["channel"] as? [String: Any],
-               let alternatives = channel["alternatives"] as? [[String: Any]],
-               let firstAlternative = alternatives.first,
-               let transcript = firstAlternative["transcript"] as? String,
-               !transcript.isEmpty {
-                
-                let isFinal = json["is_final"] as? Bool ?? false
-                let speechFinal = json["speech_final"] as? Bool ?? false
-                
-                // Language detection
-                if let detectedLanguage = firstAlternative["detected_language"] as? String {
-                    print("🌍 Deepgram detected language: \(detectedLanguage)")
-                }
-                
-                DispatchQueue.main.async {
-                    if speechFinal {
-                        // Speech turn ended - add to buffer
-                        self.transcriptBuffer += (self.transcriptBuffer.isEmpty ? "" : " ") + transcript
-                        self.transcript = self.transcriptBuffer
-                        print("✅ Deepgram speech final: \(transcript)")
-                    } else if isFinal {
-                        // Final transcript but speech continues
-                        self.transcriptBuffer += (self.transcriptBuffer.isEmpty ? "" : " ") + transcript
-                        self.transcript = self.transcriptBuffer
-                        print("✅ Deepgram final: \(transcript)")
-                    } else {
-                        // Interim result - show preview
-                        let currentBuffer = self.transcriptBuffer
-                        let preview = currentBuffer + (currentBuffer.isEmpty ? "" : " ") + transcript
-                        self.transcript = preview
-                        print("📝 Deepgram interim: \(transcript.prefix(50))...")
-                    }
-                }
-            }
-            
-        case "Metadata":
-            // Connection metadata
-            if let requestId = json["request_id"] as? String {
-                print("✅ Deepgram connection established: \(requestId)")
-            }
-            
-        case "UtteranceEnd":
-            // Utterance ended
-            print("🔚 Deepgram utterance ended")
-            
-        default:
-            print("⚠️ Unknown Deepgram message type: \(messageType)")
-        }
-    }
-    
+    // MARK: - Whisper Fallback
     private func startWhisperChunkedTranscription() {
         print("🎤 Starting Whisper chunked transcription...")
         
@@ -910,19 +713,32 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         body.append("Content-Disposition: form-data; name=\"model\"\r\n\r\n".data(using: .utf8)!)
         body.append("whisper-1\r\n".data(using: .utf8)!)
         
-        // Add language parameter
-        let language = getLanguageCode().prefix(2) // "en-US" -> "en"
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"language\"\r\n\r\n".data(using: .utf8)!)
-        body.append("\(language)\r\n".data(using: .utf8)!)
+        // Add prompt parameter to maintain context between chunks
+        // This helps Whisper understand the conversation flow and maintain consistency
+        if !transcriptBuffer.isEmpty {
+            // Use last 200 characters as context for next chunk
+            let contextPrompt = String(transcriptBuffer.suffix(200))
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"prompt\"\r\n\r\n".data(using: .utf8)!)
+            body.append("\(contextPrompt)\r\n".data(using: .utf8)!)
+            print("🔗 Using context prompt: \(contextPrompt.prefix(50))...")
+        }
+        
+        // DON'T add language parameter for mixed-language support
+        // Whisper will auto-detect the language per chunk
+        // This allows mixed English + Russian in same meeting
         
         // Add audio file
         if let audioData = try? Data(contentsOf: audioURL) {
+            print("📊 Audio file size: \(audioData.count) bytes")
             body.append("--\(boundary)\r\n".data(using: .utf8)!)
             body.append("Content-Disposition: form-data; name=\"file\"; filename=\"audio.m4a\"\r\n".data(using: .utf8)!)
             body.append("Content-Type: audio/m4a\r\n\r\n".data(using: .utf8)!)
             body.append(audioData)
             body.append("\r\n".data(using: .utf8)!)
+        } else {
+            print("❌ Failed to read audio file at \(audioURL)")
+            return
         }
         
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
@@ -934,22 +750,56 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
                 return
             }
             
+            if let httpResponse = response as? HTTPURLResponse {
+                print("📡 Whisper API response status: \(httpResponse.statusCode)")
+            }
+            
             guard let data = data else {
                 print("❌ No data received from Whisper")
                 return
             }
             
+            // Log raw response for debugging
+            if let responseString = String(data: data, encoding: .utf8) {
+                print("📥 Whisper raw response: \(responseString.prefix(200))")
+            }
+            
             do {
-                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let text = json["text"] as? String {
-                    DispatchQueue.main.async {
-                        self?.transcriptBuffer = text
-                        self?.transcript = text
-                        print("✅ Whisper transcription: \(text.prefix(100))...")
+                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    
+                    // Check for errors
+                    if let error = json["error"] as? [String: Any],
+                       let message = error["message"] as? String {
+                        print("❌ Whisper API error: \(message)")
+                        return
+                    }
+                    
+                    if let text = json["text"] as? String {
+                        // Detect language from response if available
+                        if let detectedLanguage = json["language"] as? String {
+                            print("🌍 Whisper detected language: \(detectedLanguage)")
+                        }
+                        
+                        DispatchQueue.main.async {
+                            // Append to buffer instead of replacing (for chunked transcription)
+                            if !self!.transcriptBuffer.isEmpty {
+                                self?.transcriptBuffer += " " + text
+                            } else {
+                                self?.transcriptBuffer = text
+                            }
+                            self?.transcript = self!.transcriptBuffer
+                            print("✅ Whisper transcription (\(text.count) chars): \(text.prefix(100))...")
+                            print("📝 Total buffer size: \(self!.transcriptBuffer.count) chars")
+                        }
+                    } else {
+                        print("⚠️ No 'text' field in Whisper response")
                     }
                 }
             } catch {
                 print("❌ Failed to parse Whisper response: \(error)")
+                if let responseString = String(data: data, encoding: .utf8) {
+                    print("Raw response: \(responseString)")
+                }
             }
         }.resume()
     }
@@ -966,7 +816,6 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         // Stop timers
         transcriptionTimer?.invalidate()
         insightsTimer?.invalidate()
-        deepgramKeepAliveTimer?.invalidate()
         
         // Send termination message to AssemblyAI before closing
         if let webSocket = assemblyaiWebSocket {
@@ -983,23 +832,20 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
             assemblyaiWebSocket = nil
         }
         
-        // Send close message to Deepgram before closing
-        if let webSocket = deepgramWebSocket {
-            let closeMessage = "{\"type\": \"CloseStream\"}"
-            webSocket.send(.string(closeMessage)) { error in
-                if let error = error {
-                    print("⚠️ Failed to send close to Deepgram: \(error)")
-                }
-            }
-            // Give it a moment to send, then close
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                webSocket.cancel(with: .goingAway, reason: nil)
-            }
-            deepgramWebSocket = nil
+        // Stop audio engine
+        if let engine = audioEngine {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+            audioEngine = nil
+            print("✅ Audio engine stopped")
         }
         
-        // Stop audio recorder
+        // Stop audio recorder (fallback)
         audioRecorder?.stop()
+        audioRecorder = nil
+        
+        // Close audio file
+        audioFile = nil
         
         isRecording = false
         
@@ -1140,6 +986,47 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         
         if status == noErr, let uid = deviceUID?.takeUnretainedValue() as String? {
             return uid
+        }
+        
+        return nil
+    }
+    
+    private func findAudioDeviceID(byUID uid: String) -> AudioDeviceID? {
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        
+        var dataSize: UInt32 = 0
+        var status = AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress,
+            0,
+            nil,
+            &dataSize
+        )
+        
+        guard status == noErr else { return nil }
+        
+        let deviceCount = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
+        var audioDevices = [AudioDeviceID](repeating: 0, count: deviceCount)
+        
+        status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress,
+            0,
+            nil,
+            &dataSize,
+            &audioDevices
+        )
+        
+        guard status == noErr else { return nil }
+        
+        for deviceID in audioDevices {
+            if let deviceUID = getDeviceUID(deviceID: deviceID), deviceUID == uid {
+                return deviceID
+            }
         }
         
         return nil
@@ -1311,8 +1198,8 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         
         connectionStatus = "Generating final analysis..."
         
-        // Generate comprehensive final insights
-        generateFinalInsights(for: transcript)
+        // Generate comprehensive final insights with smart speaker identification
+        generateFinalInsightsWithSpeakers(for: transcript)
     }
     
     private func generateFinalInsights(for transcript: String) {
@@ -1461,6 +1348,200 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     private func hasOpenAIKey() -> Bool {
         let key = UserDefaults.standard.string(forKey: "openaiKey") ?? ""
         return !key.isEmpty && key.hasPrefix("sk-")
+    }
+    
+    // MARK: - Smart Speaker Identification (Context-based, FREE!)
+    private func generateFinalInsightsWithSpeakers(for transcript: String) {
+        guard hasOpenAIKey() && !transcript.isEmpty else {
+            connectionStatus = "Ready"
+            return
+        }
+        
+        // Choose model from user settings (default: gpt-5-nano)
+        let selectedModel = UserDefaults.standard.string(forKey: "selectedModel") ?? "gpt-5-nano"
+        let model = selectedModel
+        
+        // Get system language for translation
+        let systemLanguage = Locale.current.language.languageCode?.identifier ?? "en"
+        let systemLanguageName = Locale.current.localizedString(forLanguageCode: systemLanguage) ?? "English"
+        
+        // Adjust tokens based on model
+        let maxTokens: Int
+        switch model {
+        case "gpt-5-mini":
+            maxTokens = 1200
+        default: // gpt-5-nano (default)
+            maxTokens = 800
+        }
+        
+        let prompt = """
+        Analyze this meeting/conversation and provide structured insights in JSON format.
+        
+        IMPORTANT INSTRUCTIONS:
+        1. The transcript may contain multiple languages (e.g., English + Russian + Korean)
+        2. Analyze the content in whatever languages are present
+        3. Provide ALL responses in \(systemLanguageName) (\(systemLanguage))
+        4. Translate any non-\(systemLanguageName) content to \(systemLanguageName) in your analysis
+        
+        SMART SPEAKER IDENTIFICATION:
+        - Try to identify speakers from context (names mentioned, roles, topics)
+        - If someone says "I'm John" or "This is Maria speaking" - use their name
+        - If you can infer roles (Manager, Developer, Client) - use those
+        - If no context available, use Speaker A, Speaker B, etc.
+        - Format: "**Name/Role**: text" or "**Speaker A**: text"
+        
+        EXAMPLE:
+        If transcript contains "Hi, I'm Alex from engineering" → use "**Alex (Engineering)**:"
+        If transcript contains "As the project manager, I think..." → use "**Project Manager**:"
+        If no context → use "**Speaker A**:", "**Speaker B**:"
+        
+        {
+          "summary": "1-2 paragraph comprehensive summary (in \(systemLanguageName))",
+          "speakers": [
+            {
+              "id": "speaker_1",
+              "name": "Alex (Engineering)" or "Speaker A" if unknown,
+              "role": "Engineer" or "Unknown",
+              "key_points": ["point1", "point2"]
+            }
+          ],
+          "conversation": [
+            {
+              "speaker": "Alex (Engineering)" or "Speaker A",
+              "text": "What they said (in \(systemLanguageName))"
+            }
+          ],
+          "action_items": [
+            {
+              "task": "Specific action (in \(systemLanguageName))",
+              "assignee": "Person responsible (if mentioned)",
+              "deadline": "Timeframe (if mentioned)",
+              "priority": "high/medium/low"
+            }
+          ],
+          "key_insights": ["Important insight (in \(systemLanguageName))"],
+          "topics_discussed": ["topic1", "topic2"],
+          "decisions_made": ["decision1", "decision2"],
+          "questions_raised": ["question1", "question2"],
+          "sentiment": "overall mood: positive/neutral/negative/mixed",
+          "keywords": ["keyword1", "keyword2", "keyword3"]
+        }
+        
+        Transcript:
+        \(transcript)
+        """
+        
+        let url = URL(string: "https://api.openai.com/v1/chat/completions")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(UserDefaults.standard.string(forKey: "openaiKey") ?? "")", forHTTPHeaderField: "Authorization")
+        
+        let body: [String: Any] = [
+            "model": model,
+            "messages": [
+                ["role": "system", "content": "You are an expert meeting analyst. Analyze conversations and identify speakers from context."],
+                ["role": "user", "content": prompt]
+            ],
+            "max_tokens": maxTokens,
+            "temperature": 0.3,
+            "response_format": ["type": "json_object"]
+        ]
+        
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            if let error = error {
+                print("❌ Final insights error: \(error)")
+                DispatchQueue.main.async {
+                    self?.connectionStatus = "Ready"
+                }
+                return
+            }
+            
+            guard let data = data else {
+                print("❌ No data from final insights")
+                DispatchQueue.main.async {
+                    self?.connectionStatus = "Ready"
+                }
+                return
+            }
+            
+            do {
+                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let choices = json["choices"] as? [[String: Any]],
+                   let firstChoice = choices.first,
+                   let message = firstChoice["message"] as? [String: Any],
+                   let content = message["content"] as? String,
+                   let insightsData = content.data(using: .utf8),
+                   let insights = try? JSONSerialization.jsonObject(with: insightsData) as? [String: Any] {
+                    
+                    // Format insights with speaker-aware conversation
+                    var formattedInsights = ""
+                    
+                    // Add summary
+                    if let summary = insights["summary"] as? String {
+                        formattedInsights += "📋 Summary:\n\(summary)\n\n"
+                    }
+                    
+                    // Add speaker-aware conversation
+                    if let conversation = insights["conversation"] as? [[String: Any]], !conversation.isEmpty {
+                        formattedInsights += "💬 Conversation:\n"
+                        for turn in conversation {
+                            if let speaker = turn["speaker"] as? String,
+                               let text = turn["text"] as? String {
+                                formattedInsights += "**\(speaker)**: \(text)\n"
+                            }
+                        }
+                        formattedInsights += "\n"
+                    }
+                    
+                    // Add action items
+                    if let actionItems = insights["action_items"] as? [[String: Any]], !actionItems.isEmpty {
+                        formattedInsights += "✅ Action Items:\n"
+                        for (index, item) in actionItems.enumerated() {
+                            if let task = item["task"] as? String {
+                                let assignee = item["assignee"] as? String ?? "Unassigned"
+                                let priority = item["priority"] as? String ?? "medium"
+                                formattedInsights += "\(index + 1). [\(priority.uppercased())] \(task) - \(assignee)\n"
+                            }
+                        }
+                        formattedInsights += "\n"
+                    }
+                    
+                    // Add key insights
+                    if let keyInsights = insights["key_insights"] as? [String], !keyInsights.isEmpty {
+                        formattedInsights += "💡 Key Insights:\n"
+                        for insight in keyInsights {
+                            formattedInsights += "• \(insight)\n"
+                        }
+                        formattedInsights += "\n"
+                    }
+                    
+                    // Add topics
+                    if let topics = insights["topics_discussed"] as? [String], !topics.isEmpty {
+                        formattedInsights += "📌 Topics: \(topics.joined(separator: ", "))\n"
+                    }
+                    
+                    // Add decisions
+                    if let decisions = insights["decisions_made"] as? [String], !decisions.isEmpty {
+                        formattedInsights += "🎯 Decisions: \(decisions.joined(separator: ", "))\n"
+                    }
+                    
+                    // Update UI
+                    DispatchQueue.main.async {
+                        self?.liveInsights = formattedInsights
+                        self?.connectionStatus = "Ready"
+                        print("✅ Final insights with smart speaker identification generated")
+                    }
+                }
+            } catch {
+                print("❌ Failed to parse final insights: \(error)")
+                DispatchQueue.main.async {
+                    self?.connectionStatus = "Ready"
+                }
+            }
+        }.resume()
     }
     
     private func isPhantomTranscript(_ text: String) -> Bool {
@@ -1632,4 +1713,5 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         UserDefaults.standard.removeObject(forKey: "recordingSessions")
         print("🗑️ All sessions cleared")
     }
+    
 }

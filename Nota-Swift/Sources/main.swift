@@ -92,20 +92,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     func toggleMiniWindow() {
-        print("🔄 toggleMiniWindow() called")
+        NSLog("🔄 DEBUG: toggleMiniWindow() called")
         
         guard let miniWindow = miniWindow else { 
-            print("❌ Mini window controller not available")
+            NSLog("❌ DEBUG: Mini window controller is nil!")
             return 
         }
         
-        if let window = miniWindow.window, window.isVisible {
-            window.orderOut(nil)
-            print("🙈 Mini window hidden")
+        NSLog("✅ DEBUG: Mini window controller exists")
+        
+        if let window = miniWindow.window {
+            NSLog("✅ DEBUG: Window exists, isVisible: \(window.isVisible)")
+            if window.isVisible {
+                window.orderOut(nil)
+                NSLog("🙈 Mini window hidden")
+            } else {
+                NSLog("📱 Showing mini window...")
+                miniWindow.showWindow()
+                NSLog("👁️ Mini window shown")
+            }
         } else {
-            print("📱 Showing mini window...")
+            NSLog("❌ DEBUG: miniWindow.window is nil! Creating window...")
             miniWindow.showWindow()
-            print("👁️ Mini window shown")
+            NSLog("✅ DEBUG: showWindow() called")
         }
     }
     

@@ -374,7 +374,6 @@ struct StatusBarPopoverView: View {
 
 struct SettingsView: View {
     @AppStorage("openaiKey") private var openaiKey = ""
-    @AppStorage("deepgramKey") private var deepgramKey = ""
     @AppStorage("selectedModel") private var selectedModel = "gpt-5-nano"
     @AppStorage("outputLanguage") private var outputLanguage = "auto"
     @AppStorage("inputDeviceId") private var inputDeviceId = "default"
@@ -429,11 +428,6 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 16) {
                         settingsRow(title: "OpenAI API Key", description: "Get your key from platform.openai.com") {
                             SecureField("sk-proj-...", text: $openaiKey)
-                                .textFieldStyle(EnhancedGlassTextFieldStyle())
-                        }
-                        
-                        settingsRow(title: "Deepgram API Key", description: "Get your key from deepgram.com") {
-                            SecureField("Token...", text: $deepgramKey)
                                 .textFieldStyle(EnhancedGlassTextFieldStyle())
                         }
                         

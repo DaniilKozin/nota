@@ -194,16 +194,18 @@ struct MiniWindowView: View {
             HStack(spacing: 8) {
                 // Record/Stop button
                 Button(action: {
-                    print("🔴 Record button clicked! Current state: \(audioRecorder.isRecording)")
+                    print("🔴 DEBUG: Record button clicked! Current state: \(audioRecorder.isRecording)")
+                    print("🔴 DEBUG: About to call audioRecorder.startRecording()")
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                         if audioRecorder.isRecording {
-                            print("⏹️ Stopping recording...")
+                            print("⏹️ DEBUG: Stopping recording...")
                             audioRecorder.stopRecording()
                         } else {
-                            print("🎤 Starting recording...")
+                            print("🎤 DEBUG: Starting recording...")
                             audioRecorder.startRecording()
                         }
                     }
+                    print("🔴 DEBUG: Button action completed")
                 }) {
                     Image(systemName: audioRecorder.isRecording ? "stop.fill" : "mic.fill")
                         .font(.system(size: 14, weight: .semibold))
