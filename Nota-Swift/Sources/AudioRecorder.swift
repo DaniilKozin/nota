@@ -90,18 +90,48 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     }
     
     func updateSettings() {
+        // Add safety check to prevent crashes during recording
+        guard !isRecording else {
+            print("⚠️ Skipping settings update during recording")
+            return
+        }
+        
         selectedDeviceId = UserDefaults.standard.string(forKey: "inputDeviceId") ?? "default"
         selectedLanguage = UserDefaults.standard.string(forKey: "outputLanguage") ?? "auto"
         transcriptionProvider = UserDefaults.standard.string(forKey: "transcriptionProvider") ?? "auto"
+        
+        print("🔧 Settings updated: device=\(selectedDeviceId), language=\(selectedLanguage), provider=\(transcriptionProvider)")
     }
     
     // MARK: - Audio Device Discovery
     func discoverAudioDevices() {
+        // Add safety check to prevent crashes during recording
+        guard !isRecording else {
+            print("⚠️ Skipping device discovery during recording")
+            return
+        }
+        
         var devices: [AudioDevice] = []
         
         // Add default device
         devices.append(AudioDevice(id: "default", name: "Default Input", isInput: true))
         
+        // Wrap CoreAudio operations in do-catch for safety
+        do {
+            try discoverCoreAudioDevices(&devices)
+        } catch {
+            print("⚠️ Error discovering audio devices: \(error)")
+            // Continue with just default device
+        }
+        
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.availableDevices = devices
+            print("🎧 Total input devices found: \(devices.count)")
+        }
+    }
+    
+    private func discoverCoreAudioDevices(_ devices: inout [AudioDevice]) throws {
         // Get all audio devices using CoreAudio
         var propertyAddress = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
@@ -120,13 +150,20 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         
         guard status == noErr else {
             print("⚠️ Could not get audio devices (permissions may not be granted yet)")
-            DispatchQueue.main.async {
-                self.availableDevices = devices
-            }
+            return
+        }
+        
+        guard dataSize > 0 else {
+            print("⚠️ No audio devices found")
             return
         }
         
         let deviceCount = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
+        guard deviceCount > 0 else {
+            print("⚠️ Invalid device count: \(deviceCount)")
+            return
+        }
+        
         var audioDevices = [AudioDeviceID](repeating: 0, count: deviceCount)
         
         status = AudioObjectGetPropertyData(
@@ -140,33 +177,30 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         
         guard status == noErr else {
             print("⚠️ Could not get audio device data")
-            DispatchQueue.main.async {
-                self.availableDevices = devices
-            }
             return
         }
         
         for deviceID in audioDevices {
-            // Check if device has input channels
-            if hasInputChannels(deviceID: deviceID),
-               let deviceName = getDeviceName(deviceID: deviceID),
-               let deviceUID = getDeviceUID(deviceID: deviceID) {
-                devices.append(AudioDevice(
-                    id: deviceUID,
-                    name: deviceName,
-                    isInput: true
-                ))
-                print("🎧 Found input device: \(deviceName) (UID: \(deviceUID))")
+            // Add safety checks for each device
+            do {
+                if try safeHasInputChannels(deviceID: deviceID),
+                   let deviceName = getDeviceName(deviceID: deviceID),
+                   let deviceUID = getDeviceUID(deviceID: deviceID) {
+                    devices.append(AudioDevice(
+                        id: deviceUID,
+                        name: deviceName,
+                        isInput: true
+                    ))
+                    print("🎧 Found input device: \(deviceName) (UID: \(deviceUID))")
+                }
+            } catch {
+                print("⚠️ Error checking device \(deviceID): \(error)")
+                continue
             }
-        }
-        
-        DispatchQueue.main.async {
-            self.availableDevices = devices
-            print("🎧 Total input devices found: \(devices.count)")
         }
     }
     
-    private func hasInputChannels(deviceID: AudioDeviceID) -> Bool {
+    private func safeHasInputChannels(deviceID: AudioDeviceID) throws -> Bool {
         var propertyAddress = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyStreamConfiguration,
             mScope: kAudioDevicePropertyScopeInput,
@@ -186,8 +220,29 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
             return false
         }
         
+        // Safer memory allocation with proper error handling
+        guard dataSize >= MemoryLayout<AudioBufferList>.size else {
+            print("⚠️ Invalid data size for device \(deviceID): \(dataSize)")
+            return false
+        }
+        
         let bufferListPointer = UnsafeMutablePointer<AudioBufferList>.allocate(capacity: 1)
-        defer { bufferListPointer.deallocate() }
+        defer { 
+            bufferListPointer.deallocate() 
+        }
+        
+        // Initialize the allocated memory to prevent crashes
+        bufferListPointer.initialize(to: AudioBufferList(
+            mNumberBuffers: 0,
+            mBuffers: AudioBuffer(
+                mNumberChannels: 0,
+                mDataByteSize: 0,
+                mData: nil
+            )
+        ))
+        defer {
+            bufferListPointer.deinitialize(count: 1)
+        }
         
         let getStatus = AudioObjectGetPropertyData(
             deviceID,
@@ -199,12 +254,17 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         )
         
         guard getStatus == noErr else {
+            print("⚠️ Failed to get stream configuration for device \(deviceID): \(getStatus)")
             return false
         }
         
         let bufferList = bufferListPointer.pointee
-        return bufferList.mNumberBuffers > 0 && bufferList.mBuffers.mNumberChannels > 0
+        let hasChannels = bufferList.mNumberBuffers > 0 && bufferList.mBuffers.mNumberChannels > 0
+        
+        return hasChannels
     }
+    
+
     
     // MARK: - Language Support
     private func getLanguageCode() -> String {
@@ -669,12 +729,17 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     }
     
     private func startPeriodicWhisperTranscription() {
+        // Invalidate existing timer if any
+        transcriptionTimer?.invalidate()
+        
         // Send audio to Whisper API every 5 seconds for transcription
-        Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] timer in
+        transcriptionTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] timer in
             guard let self = self, self.isRecording else {
                 timer.invalidate()
                 return
             }
+            
+            print("⏰ Timer fired - sending audio to Whisper...")
             
             // Pause recording temporarily
             self.audioRecorder?.pause()
@@ -682,11 +747,15 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
             // Send current audio to Whisper
             if let audioURL = self.recordingURL {
                 self.transcribeWithWhisper(audioURL: audioURL)
+            } else {
+                print("⚠️ No recording URL available")
             }
             
             // Resume recording
             self.audioRecorder?.record()
         }
+        
+        print("✅ Whisper timer started (5 second interval)")
     }
     
     private func transcribeWithWhisper(audioURL: URL) {

@@ -1201,7 +1201,10 @@ struct SettingsTabView: View {
                         }
                     }
                     .onChange(of: inputDeviceId) { _ in
-                        audioRecorder.updateSettings()
+                        // Only update settings if not recording
+                        if !audioRecorder.isRecording {
+                            audioRecorder.updateSettings()
+                        }
                     }
                     .disabled(audioRecorder.isRecording) // Disable during recording
                     
@@ -1211,7 +1214,10 @@ struct SettingsTabView: View {
                         }
                     }
                     .onChange(of: outputLanguage) { _ in
-                        audioRecorder.updateSettings()
+                        // Only update settings if not recording
+                        if !audioRecorder.isRecording {
+                            audioRecorder.updateSettings()
+                        }
                     }
                     
                     Picker("Transcription Provider", selection: $transcriptionProvider) {
@@ -1220,7 +1226,10 @@ struct SettingsTabView: View {
                         Text("OpenAI Whisper (Fallback)").tag("whisper")
                     }
                     .onChange(of: transcriptionProvider) { _ in
-                        audioRecorder.updateSettings()
+                        // Only update settings if not recording
+                        if !audioRecorder.isRecording {
+                            audioRecorder.updateSettings()
+                        }
                     }
                     
                     Text("Auto mode: AssemblyAI for all languages (included API key)")
@@ -1243,10 +1252,14 @@ struct SettingsTabView: View {
                     Button("Refresh Devices") {
                         // Only refresh if not recording to avoid crashes
                         if !audioRecorder.isRecording {
+                            print("🔧 Manual device refresh requested")
                             audioRecorder.discoverAudioDevices()
+                        } else {
+                            print("⚠️ Cannot refresh devices while recording")
                         }
                     }
                     .disabled(audioRecorder.isRecording)
+                    .help(audioRecorder.isRecording ? "Cannot refresh devices while recording" : "Refresh audio input devices")
                 }
                 
                 // Shortcuts Section
@@ -1288,12 +1301,22 @@ struct SettingsTabView: View {
             // Skip device discovery entirely during recording to prevent crashes
             if !audioRecorder.isRecording {
                 // Delay device discovery slightly to avoid UI conflicts
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    // Double-check recording state before discovery
                     if !audioRecorder.isRecording {
+                        print("🔧 Settings: Starting safe device discovery")
                         audioRecorder.discoverAudioDevices()
+                    } else {
+                        print("⚠️ Settings: Skipped device discovery - recording started")
                     }
                 }
+            } else {
+                print("⚠️ Settings: Skipped device discovery - currently recording")
             }
+        }
+        .onDisappear {
+            // Clean up any pending operations when settings window closes
+            print("🔧 Settings window closed")
         }
     }
 }
