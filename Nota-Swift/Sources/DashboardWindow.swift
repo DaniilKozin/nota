@@ -1155,8 +1155,8 @@ struct MetadataItem: View {
 struct SettingsTabView: View {
     @ObservedObject var audioRecorder: AudioRecorder
     @AppStorage("openaiKey") private var openaiKey = ""
-    @AppStorage("assemblyaiKey") private var assemblyaiKey = "bcacd502bfd640bd817306c3e35a3626"
-    @AppStorage("transcriptionProvider") private var transcriptionProvider = "auto"
+    @AppStorage("assemblyaiKey") private var assemblyaiKey = ""
+    @AppStorage("transcriptionProvider") private var transcriptionProvider = "openai"
     @AppStorage("selectedModel") private var selectedModel = "gpt-5-nano"
     @AppStorage("outputLanguage") private var outputLanguage = "auto"
     @AppStorage("inputDeviceId") private var inputDeviceId = "default"
@@ -1221,9 +1221,9 @@ struct SettingsTabView: View {
                     }
                     
                     Picker("Transcription Provider", selection: $transcriptionProvider) {
-                        Text("Auto (AssemblyAI - 99 Languages)").tag("auto")
-                        Text("AssemblyAI (99 Languages)").tag("assemblyai")
-                        Text("OpenAI Whisper (Fallback)").tag("whisper")
+                        Text("OpenAI Whisper (Default - All Languages)").tag("openai")
+                        Text("AssemblyAI (6 Languages - Fast)").tag("assemblyai")
+                        Text("Auto (OpenAI Default)").tag("auto")
                     }
                     .onChange(of: transcriptionProvider) { _ in
                         // Only update settings if not recording
@@ -1232,19 +1232,29 @@ struct SettingsTabView: View {
                         }
                     }
                     
-                    Text("Auto mode: AssemblyAI for all languages (included API key)")
+                    Text("OpenAI Whisper: 50+ languages including Russian (requires your API key)")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
                 
                 // API Keys for transcription
-                Section(header: Text("Transcription API Keys").font(.headline)) {
+                Section(header: Text("API Keys").font(.headline)) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("AssemblyAI API Key")
+                        Text("OpenAI API Key (Required)")
+                            .font(.subheadline)
+                        SecureField("sk-proj-...", text: $openaiKey)
+                            .textFieldStyle(.roundedBorder)
+                        Text("Required for Whisper transcription + GPT-5 Nano insights")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("AssemblyAI API Key (Optional)")
                             .font(.subheadline)
                         SecureField("Included - or add your own", text: $assemblyaiKey)
                             .textFieldStyle(.roundedBorder)
-                        Text("Default key included (99 languages, $0.27/hour)")
+                        Text("Default key included (6 languages: en, es, fr, de, it, pt)")
                             .font(.caption2)
                             .foregroundColor(.secondary)
                     }

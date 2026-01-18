@@ -29,7 +29,7 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     
     private var selectedDeviceId: String = "default"
     private var selectedLanguage: String = "auto"
-    private var transcriptionProvider: String = "auto"
+    private var transcriptionProvider: String = "openai"
     
     // Audio recording with AVAudioEngine (supports device selection)
     private var audioEngine: AVAudioEngine?
@@ -86,7 +86,7 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     private func loadSettings() {
         selectedDeviceId = UserDefaults.standard.string(forKey: "inputDeviceId") ?? "default"
         selectedLanguage = UserDefaults.standard.string(forKey: "outputLanguage") ?? "auto"
-        transcriptionProvider = UserDefaults.standard.string(forKey: "transcriptionProvider") ?? "auto"
+        transcriptionProvider = UserDefaults.standard.string(forKey: "transcriptionProvider") ?? "openai"
     }
     
     func updateSettings() {
@@ -98,7 +98,7 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         
         selectedDeviceId = UserDefaults.standard.string(forKey: "inputDeviceId") ?? "default"
         selectedLanguage = UserDefaults.standard.string(forKey: "outputLanguage") ?? "auto"
-        transcriptionProvider = UserDefaults.standard.string(forKey: "transcriptionProvider") ?? "auto"
+        transcriptionProvider = UserDefaults.standard.string(forKey: "transcriptionProvider") ?? "openai"
         
         print("🔧 Settings updated: device=\(selectedDeviceId), language=\(selectedLanguage), provider=\(transcriptionProvider)")
     }
@@ -403,26 +403,30 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     private var assemblyaiAudioPosition: Int = 0
     
     private func startStreamingTranscription() {
-        let provider = UserDefaults.standard.string(forKey: "transcriptionProvider") ?? "auto"
+        let provider = UserDefaults.standard.string(forKey: "transcriptionProvider") ?? "openai"
         let language = getLanguageCode()
         
         print("🎙️ Transcription provider: \(provider), language: \(language)")
         
+        // OpenAI Whisper supports all languages (50+)
         // AssemblyAI Streaming only supports: English, Spanish, French, German, Italian, Portuguese
         let assemblyAISupportedLanguages = ["en", "es", "fr", "de", "it", "pt"]
         let languagePrefix = String(language.prefix(2))
         let isAssemblyAISupported = assemblyAISupportedLanguages.contains(languagePrefix)
         
-        // Smart provider selection
+        // Smart provider selection - OpenAI first, AssemblyAI as option
         let selectedProvider: String
-        if provider == "auto" {
-            // Auto mode: Use AssemblyAI for supported languages, Whisper for others
+        if provider == "auto" || provider == "openai" {
+            // Default to OpenAI Whisper (supports all languages including Russian)
+            selectedProvider = "whisper"
+            print("✅ Using OpenAI Whisper (supports all languages including Russian)")
+        } else if provider == "assemblyai" {
             if isAssemblyAISupported {
                 selectedProvider = "assemblyai"
                 print("✅ Language \(language) supported by AssemblyAI streaming")
             } else {
                 selectedProvider = "whisper"
-                print("⚠️ Language \(language) NOT supported by AssemblyAI streaming, using Whisper")
+                print("⚠️ Language \(language) NOT supported by AssemblyAI, falling back to Whisper")
             }
         } else {
             selectedProvider = provider
@@ -432,6 +436,10 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         
         // Start with selected provider
         switch selectedProvider {
+        case "whisper":
+            // OpenAI Whisper - supports all languages including Russian
+            startWhisperChunkedTranscription()
+            
         case "assemblyai":
             if let key = UserDefaults.standard.string(forKey: "assemblyaiKey"), !key.isEmpty {
                 if isAssemblyAISupported {
@@ -445,16 +453,10 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
                 startWhisperChunkedTranscription()
             }
             
-        case "whisper":
-            startWhisperChunkedTranscription()
-            
         default:
-            // Fallback chain: AssemblyAI (if supported) -> Whisper
-            if let key = UserDefaults.standard.string(forKey: "assemblyaiKey"), !key.isEmpty, isAssemblyAISupported {
-                startAssemblyAIStreaming()
-            } else {
-                startWhisperChunkedTranscription()
-            }
+            // Fallback to OpenAI Whisper
+            print("🔄 Unknown provider \(selectedProvider), using Whisper")
+            startWhisperChunkedTranscription()
         }
     }
     
@@ -761,11 +763,15 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     private func transcribeWithWhisper(audioURL: URL) {
         guard let openaiKey = UserDefaults.standard.string(forKey: "openaiKey"),
               !openaiKey.isEmpty else {
-            print("⚠️ No OpenAI key configured")
+            print("❌ No OpenAI key configured - Russian transcription requires OpenAI API key")
+            DispatchQueue.main.async {
+                self.connectionStatus = "OpenAI API key required for Russian transcription"
+            }
             return
         }
         
         print("📤 Sending audio to Whisper API...")
+        print("🔑 Using OpenAI key: \(openaiKey.prefix(10))...")
         
         let url = URL(string: "https://api.openai.com/v1/audio/transcriptions")!
         var request = URLRequest(url: url)
@@ -782,6 +788,16 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         body.append("Content-Disposition: form-data; name=\"model\"\r\n\r\n".data(using: .utf8)!)
         body.append("whisper-1\r\n".data(using: .utf8)!)
         
+        // Add language parameter for better Russian recognition
+        let language = getLanguageCode()
+        let languagePrefix = String(language.prefix(2))
+        if languagePrefix == "ru" {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"language\"\r\n\r\n".data(using: .utf8)!)
+            body.append("ru\r\n".data(using: .utf8)!)
+            print("🇷🇺 Added Russian language parameter to Whisper request")
+        }
+        
         // Add prompt parameter to maintain context between chunks
         // This helps Whisper understand the conversation flow and maintain consistency
         if !transcriptBuffer.isEmpty {
@@ -793,13 +809,13 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
             print("🔗 Using context prompt: \(contextPrompt.prefix(50))...")
         }
         
-        // DON'T add language parameter for mixed-language support
-        // Whisper will auto-detect the language per chunk
-        // This allows mixed English + Russian in same meeting
-        
         // Add audio file
         if let audioData = try? Data(contentsOf: audioURL) {
             print("📊 Audio file size: \(audioData.count) bytes")
+            if audioData.count == 0 {
+                print("⚠️ Audio file is empty - no audio data to transcribe")
+                return
+            }
             body.append("--\(boundary)\r\n".data(using: .utf8)!)
             body.append("Content-Disposition: form-data; name=\"file\"; filename=\"audio.m4a\"\r\n".data(using: .utf8)!)
             body.append("Content-Type: audio/m4a\r\n\r\n".data(using: .utf8)!)
@@ -813,14 +829,25 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
         request.httpBody = body
         
+        print("🌐 Making Whisper API request...")
+        
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             if let error = error {
-                print("❌ Whisper API error: \(error)")
+                print("❌ Whisper API network error: \(error)")
+                DispatchQueue.main.async {
+                    self?.connectionStatus = "Network error: \(error.localizedDescription)"
+                }
                 return
             }
             
             if let httpResponse = response as? HTTPURLResponse {
                 print("📡 Whisper API response status: \(httpResponse.statusCode)")
+                if httpResponse.statusCode != 200 {
+                    print("❌ HTTP error: \(httpResponse.statusCode)")
+                    DispatchQueue.main.async {
+                        self?.connectionStatus = "API error: HTTP \(httpResponse.statusCode)"
+                    }
+                }
             }
             
             guard let data = data else {
@@ -830,7 +857,7 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
             
             // Log raw response for debugging
             if let responseString = String(data: data, encoding: .utf8) {
-                print("📥 Whisper raw response: \(responseString.prefix(200))")
+                print("📥 Whisper raw response: \(responseString.prefix(500))")
             }
             
             do {
@@ -840,16 +867,22 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
                     if let error = json["error"] as? [String: Any],
                        let message = error["message"] as? String {
                         print("❌ Whisper API error: \(message)")
+                        DispatchQueue.main.async {
+                            self?.connectionStatus = "Whisper error: \(message)"
+                        }
                         return
                     }
                     
-                    if let text = json["text"] as? String {
+                    if let text = json["text"] as? String, !text.isEmpty {
                         // Detect language from response if available
                         if let detectedLanguage = json["language"] as? String {
                             print("🌍 Whisper detected language: \(detectedLanguage)")
                         }
                         
                         DispatchQueue.main.async {
+                            // Update connection status
+                            self?.connectionStatus = "Transcribing..."
+                            
                             // Append to buffer instead of replacing (for chunked transcription)
                             if !self!.transcriptBuffer.isEmpty {
                                 self?.transcriptBuffer += " " + text
@@ -861,7 +894,10 @@ class AudioRecorder: NSObject, ObservableObject, URLSessionWebSocketDelegate {
                             print("📝 Total buffer size: \(self!.transcriptBuffer.count) chars")
                         }
                     } else {
-                        print("⚠️ No 'text' field in Whisper response")
+                        print("⚠️ No 'text' field in Whisper response or text is empty")
+                        if let text = json["text"] as? String {
+                            print("📝 Empty text received from Whisper")
+                        }
                     }
                 }
             } catch {
